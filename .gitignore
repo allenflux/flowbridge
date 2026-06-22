@@ -1,0 +1,36 @@
+# Local Go caches
+.gocache/
+.gomodcache/
+
+# Go build outputs
+flowbridge
+*.test
+*.out
+coverage.out
+dist/
+build/
+
+# Local SQLite data
+flowbridge.db
+flowbridge.db-shm
+flowbridge.db-wal
+data/
+
+# Local env/config overrides
+.env
+.env.*
+*.local.json
+
+# Logs and runtime files
+*.log
+*.pid
+tmp/
+
+# IDE/editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store

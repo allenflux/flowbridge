@@ -1,0 +1,11 @@
+{
+  "addr": ":8080",
+  "backend_base_url": "https://p0-api.inaiai.com",
+  "db_path": "data/flowbridge.db",
+  "worker_concurrency": 8,
+  "worker_queue_size": 10000,
+  "max_poll_errors": 10,
+  "poll_interval": "3s",
+  "task_timeout": "30m",
+  "http_timeout": "30s"
+}

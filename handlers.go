@@ -126,8 +126,7 @@ func (s *Server) getPublicTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	req := requestFromRaw(detail.RequestPayload)
-	writeJSON(w, http.StatusOK, publicResponse(*detail, req, true))
+	writeJSON(w, http.StatusOK, publicTaskQueryResponse(*detail))
 }
 
 func (s *Server) adminList(w http.ResponseWriter, r *http.Request) {
@@ -275,6 +274,31 @@ func publicResponse(detail TaskDetail, req AnimeVideoRequest, includeSteps bool)
 	}
 	if includeSteps {
 		resp.Steps = detail.Steps
+	}
+	return resp
+}
+
+func publicTaskQueryResponse(detail TaskDetail) any {
+	if detail.Status == StatusSuccess && len(detail.FinalResult) > 0 {
+		var final any
+		if err := json.Unmarshal(detail.FinalResult, &final); err == nil {
+			return final
+		}
+		return detail.FinalResult
+	}
+	resp := map[string]any{
+		"task_id":      detail.TaskID,
+		"status":       detail.Status,
+		"task_type":    detail.WorkflowType,
+		"current_step": detail.CurrentStep,
+		"created_at":   detail.CreatedAt.Format(time.RFC3339),
+		"updated_at":   detail.UpdatedAt.Format(time.RFC3339),
+	}
+	if detail.ErrorMessage != "" {
+		resp["error"] = detail.ErrorMessage
+	}
+	if detail.FinishedAt != nil {
+		resp["finished_at"] = detail.FinishedAt.Format(time.RFC3339)
 	}
 	return resp
 }

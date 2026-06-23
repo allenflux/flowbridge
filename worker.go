@@ -192,7 +192,6 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 	}
 
 	backendID := step.BackendTaskID
-	alternateBackendID := backendUUIDFromRaw(step.ResponsePayload)
 	if backendID == "" {
 		rawResp, resp, err := w.backend.PostForm(ctx, "/api/public/generate/undress/anime", form, req.APIKey)
 		if err != nil {
@@ -200,7 +199,6 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 			return "", err
 		}
 		backendID = backendTaskID(resp)
-		alternateBackendID = backendUUID(resp)
 		if backendID == "" {
 			err := errors.New("backend image step did not return uuid/task_id")
 			_ = w.store.MarkStepFailed(ctx, task.ID, 1, err.Error(), rawResp)
@@ -211,7 +209,7 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 		}
 	}
 
-	rawResult, result, err := w.waitBackendTask(ctx, task.ID, 1, backendID, alternateBackendID, req.APIKey)
+	rawResult, result, err := w.waitBackendTask(ctx, task.ID, 1, backendID, req.APIKey)
 	if err != nil {
 		_ = w.store.MarkStepFailed(ctx, task.ID, 1, err.Error(), rawResult)
 		return "", err
@@ -256,7 +254,6 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 	}
 
 	backendID := step.BackendTaskID
-	alternateBackendID := backendUUIDFromRaw(step.ResponsePayload)
 	if backendID == "" {
 		rawResp, resp, err := w.backend.PostForm(ctx, "/api/public/generate/undress/anime/video", form, req.APIKey)
 		if err != nil {
@@ -264,7 +261,6 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 			return nil, err
 		}
 		backendID = backendTaskID(resp)
-		alternateBackendID = backendUUID(resp)
 		if backendID == "" {
 			err := errors.New("backend video step did not return uuid/task_id")
 			_ = w.store.MarkStepFailed(ctx, task.ID, 2, err.Error(), rawResp)
@@ -275,7 +271,7 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 		}
 	}
 
-	rawResult, _, err := w.waitBackendTask(ctx, task.ID, 2, backendID, alternateBackendID, req.APIKey)
+	rawResult, _, err := w.waitBackendTask(ctx, task.ID, 2, backendID, req.APIKey)
 	if err != nil {
 		_ = w.store.MarkStepFailed(ctx, task.ID, 2, err.Error(), rawResult)
 		return nil, err
@@ -286,29 +282,21 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 	return rawResult, nil
 }
 
-func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, stepIndex int, backendTaskID string, alternateBackendTaskID string, apiKey string) (json.RawMessage, map[string]any, error) {
+func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, stepIndex int, backendTaskID string, apiKey string) (json.RawMessage, map[string]any, error) {
 	var lastRaw json.RawMessage
 	consecutiveErrors := 0
-	activeTaskID := backendTaskID
-	fallbackTried := false
 	for {
-		raw, result, err := w.backend.GetTask(ctx, activeTaskID, apiKey)
+		raw, result, err := w.backend.GetTask(ctx, backendTaskID, apiKey)
 		if err != nil {
 			lastRaw = raw
 			consecutiveErrors++
-			if strings.Contains(err.Error(), "HTTP 404") && !fallbackTried && alternateBackendTaskID != "" && alternateBackendTaskID != activeTaskID {
-				fallbackTried = true
-				_ = w.store.UpdateStepPollError(ctx, workflowTaskID, stepIndex, "backend task_id returned 404, retrying with backend uuid: "+err.Error(), raw)
-				activeTaskID = alternateBackendTaskID
-				continue
-			}
 			_ = w.store.UpdateStepPollError(ctx, workflowTaskID, stepIndex, "poll backend task failed: "+err.Error(), raw)
 			if consecutiveErrors >= w.cfg.MaxPollErrors {
-				return lastRaw, nil, fmt.Errorf("backend task %s query failed %d times: %w", activeTaskID, consecutiveErrors, err)
+				return lastRaw, nil, fmt.Errorf("backend task %s query failed %d times: %w", backendTaskID, consecutiveErrors, err)
 			}
 			select {
 			case <-ctx.Done():
-				return lastRaw, nil, fmt.Errorf("timeout waiting for backend task %s: %w", activeTaskID, ctx.Err())
+				return lastRaw, nil, fmt.Errorf("timeout waiting for backend task %s: %w", backendTaskID, ctx.Err())
 			case <-time.After(w.cfg.PollInterval):
 				continue
 			}
@@ -319,11 +307,11 @@ func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, step
 		case StatusSuccess:
 			return raw, result, nil
 		case StatusFailed:
-			return raw, result, fmt.Errorf("backend task %s failed with status -1", activeTaskID)
+			return raw, result, fmt.Errorf("backend task %s failed with status -1", backendTaskID)
 		default:
 			select {
 			case <-ctx.Done():
-				return lastRaw, result, fmt.Errorf("timeout waiting for backend task %s: %w", activeTaskID, ctx.Err())
+				return lastRaw, result, fmt.Errorf("timeout waiting for backend task %s: %w", backendTaskID, ctx.Err())
 			case <-time.After(w.cfg.PollInterval):
 			}
 		}

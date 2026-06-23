@@ -204,13 +204,22 @@ func (s *Store) ListSteps(ctx context.Context, taskID int64) ([]WorkflowStepReco
 	return steps, rows.Err()
 }
 
-func (s *Store) ListTasks(ctx context.Context, limit int) ([]WorkflowTask, error) {
+func (s *Store) CountTasks(ctx context.Context) (int, error) {
+	var total int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_tasks`).Scan(&total)
+	return total, err
+}
+
+func (s *Store) ListTasks(ctx context.Context, limit int, offset int) ([]WorkflowTask, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id, task_id, workflow_type, status, current_step, request_payload,
 		COALESCE(final_result, ''), error_message, created_at, updated_at, finished_at
-		FROM workflow_tasks ORDER BY id DESC LIMIT ?`, limit)
+		FROM workflow_tasks ORDER BY id DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
 	}

@@ -69,6 +69,21 @@ bash scripts/workflow_smoke.sh
 
 Keep `COUNT` and `CONCURRENCY` small for production smoke tests. The workflow test submits real backend jobs.
 
+The workflow smoke script defaults to this request shape:
+
+```bash
+curl --location 'http://43.213.13.89:7070/api/public/generate/undress/anime/video' \
+  --header 'Accept: application/json' \
+  --header 'Content-Type: application/x-www-form-urlencoded' \
+  --header 'Apikey: your-user-api-key' \
+  --data-urlencode 'source_path=http://allenflux.tech:8000/files/44e8e840819be8e0638087a2.jpg' \
+  --data-urlencode 'title=auto generated curl' \
+  --data-urlencode 'fee=10' \
+  --data-urlencode 'incoming_prompt=' \
+  --data-urlencode 'scene_name=goal_kick_portugal' \
+  --data-urlencode 'output_format=video'
+```
+
 Use another config file:
 
 ```bash

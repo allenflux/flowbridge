@@ -56,7 +56,12 @@ func (c *BackendClient) PostForm(ctx context.Context, path string, form map[stri
 }
 
 func (c *BackendClient) GetTask(ctx context.Context, taskID string, apiKey string) (json.RawMessage, map[string]any, error) {
-	u := c.baseURL + "/api/public/task?task_id=" + url.QueryEscape(taskID)
+	values := url.Values{}
+	values.Set("task_id", taskID)
+	if strings.TrimSpace(apiKey) != "" {
+		values.Set("apikey", strings.TrimSpace(apiKey))
+	}
+	u := c.baseURL + "/api/public/task?" + values.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, nil, err
@@ -89,6 +94,7 @@ func applyAPIKey(req *http.Request, apiKey string) {
 		return
 	}
 	req.Header.Set("Apikey", apiKey)
+	req.Header.Set("X-API-KEY", apiKey)
 }
 
 func backendTaskID(resp map[string]any) string {

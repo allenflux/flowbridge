@@ -59,11 +59,24 @@
   </div>
   <form class="d-flex gap-2" method="get" action="/admin/workflows">
     <input class="form-control" style="min-width: 320px" name="task_id" value="{{.TaskID}}" placeholder="Search bridge task_id">
+    <input type="hidden" name="page_size" value="{{.PageSize}}">
     <button class="btn btn-primary" type="submit">Search</button>
   </form>
 </div>
 
 <div class="panel">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 px-3 py-2 border-bottom">
+    <div class="text-secondary small">Total {{.Total}} · Page {{.Page}} / {{.TotalPages}}</div>
+    <form class="d-flex align-items-center gap-2" method="get" action="/admin/workflows">
+      <label class="text-secondary small" for="page-size">Page size</label>
+      <select class="form-select form-select-sm" id="page-size" name="page_size" style="width: 90px" onchange="this.form.submit()">
+        <option value="25" {{if eq .PageSize 25}}selected{{end}}>25</option>
+        <option value="50" {{if eq .PageSize 50}}selected{{end}}>50</option>
+        <option value="100" {{if eq .PageSize 100}}selected{{end}}>100</option>
+        <option value="200" {{if eq .PageSize 200}}selected{{end}}>200</option>
+      </select>
+    </form>
+  </div>
   <div class="table-responsive">
     <table class="table table-hover align-middle">
       <thead class="table-light">
@@ -91,6 +104,19 @@
         {{end}}
       </tbody>
     </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center px-3 py-3 border-top">
+    {{if .HasPrev}}
+    <a class="btn btn-sm btn-outline-secondary" href="/admin/workflows?page={{.PrevPage}}&page_size={{.PageSize}}">Previous</a>
+    {{else}}
+    <button class="btn btn-sm btn-outline-secondary" disabled>Previous</button>
+    {{end}}
+    <span class="text-secondary small">Page {{.Page}} of {{.TotalPages}}</span>
+    {{if .HasNext}}
+    <a class="btn btn-sm btn-outline-secondary" href="/admin/workflows?page={{.NextPage}}&page_size={{.PageSize}}">Next</a>
+    {{else}}
+    <button class="btn btn-sm btn-outline-secondary" disabled>Next</button>
+    {{end}}
   </div>
 </div>
 {{template "layout_end" .}}
@@ -124,6 +150,11 @@
   <div class="col-md-3"><div class="panel p-3"><div class="muted-label">Workflow</div><div class="fw-semibold metric-value">{{.Task.WorkflowType}}</div></div></div>
   <div class="col-md-3"><div class="panel p-3"><div class="muted-label">Created</div><div class="fw-semibold metric-value">{{formatTime .Task.CreatedAt}}</div></div></div>
   <div class="col-md-3"><div class="panel p-3"><div class="muted-label">Updated</div><div class="fw-semibold metric-value">{{formatTime .Task.UpdatedAt}}</div></div></div>
+</div>
+
+<div class="panel p-3 mb-4">
+  <div class="muted-label">Stored User Apikey</div>
+  <div class="fw-semibold metric-value">{{if requestKey .Task.RequestPayload "apikey"}}{{requestKey .Task.RequestPayload "apikey"}}{{else}}<span class="text-danger">Missing</span>{{end}}</div>
 </div>
 
 {{if .Task.ErrorMessage}}

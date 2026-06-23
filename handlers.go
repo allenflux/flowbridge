@@ -37,6 +37,7 @@ func NewServer(cfg Config, store *Store, worker *Worker) *Server {
 			"prettyJSON":  prettyJSON,
 			"formatTime":  formatTime,
 			"jsonField":   jsonField,
+			"requestKey":  requestKey,
 		}).ParseFS(templateFS, "templates/admin.html")),
 	}
 	s.routes()
@@ -137,20 +138,64 @@ func (s *Server) adminList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	tasks, err := s.store.ListTasks(r.Context(), 100)
+	page := queryInt(r, "page", 1)
+	pageSize := queryInt(r, "page_size", 50)
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	total, err := s.store.CountTasks(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	totalPages := (total + pageSize - 1) / pageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	offset := (page - 1) * pageSize
+	tasks, err := s.store.ListTasks(r.Context(), pageSize, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if err := s.admin.ExecuteTemplate(w, "list", map[string]any{
-		"Title":   "FlowBridge Workflows",
-		"Tasks":   tasks,
-		"TaskID":  queryTaskID,
-		"Now":     time.Now(),
-		"Backend": s.cfg.BackendBaseURL,
+		"Title":      "FlowBridge Workflows",
+		"Tasks":      tasks,
+		"TaskID":     queryTaskID,
+		"Now":        time.Now(),
+		"Backend":    s.cfg.BackendBaseURL,
+		"Page":       page,
+		"PageSize":   pageSize,
+		"Total":      total,
+		"TotalPages": totalPages,
+		"PrevPage":   page - 1,
+		"NextPage":   page + 1,
+		"HasPrev":    page > 1,
+		"HasNext":    page < totalPages,
 	}); err != nil {
 		log.Printf("render admin list failed: %v", err)
 	}
+}
+
+func queryInt(r *http.Request, key string, fallback int) int {
+	value := strings.TrimSpace(r.URL.Query().Get(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func (s *Server) adminDetail(w http.ResponseWriter, r *http.Request) {
@@ -423,6 +468,17 @@ func jsonField(raw json.RawMessage, key string) string {
 		}
 		return string(rawValue)
 	}
+}
+
+func requestKey(raw json.RawMessage, key string) string {
+	value := jsonField(raw, key)
+	if value == "" {
+		return ""
+	}
+	if key == "apikey" || key == "api_key" || strings.EqualFold(key, "apikey") {
+		return redactSecret(value)
+	}
+	return value
 }
 
 func formatTime(t any) string {

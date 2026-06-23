@@ -41,8 +41,33 @@ http://127.0.0.1:8080
 SQLite data is persisted under:
 
 ```text
-./data/flowbridge.db
+Docker volume: flowbridge-data
 ```
+
+Do not use `docker compose down -v` unless you intentionally want to delete the DB volume.
+
+## Smoke Tests
+
+Lightweight service health test:
+
+```bash
+FLOWBRIDGE_BASE_URL=https://your-flowbridge-domain \
+COUNT=30 \
+CONCURRENCY=5 \
+bash scripts/smoke_health.sh
+```
+
+Small real workflow test:
+
+```bash
+FLOWBRIDGE_BASE_URL=https://your-flowbridge-domain \
+FLOWBRIDGE_APIKEY=your-user-api-key \
+COUNT=5 \
+CONCURRENCY=2 \
+bash scripts/workflow_smoke.sh
+```
+
+Keep `COUNT` and `CONCURRENCY` small for production smoke tests. The workflow test submits real backend jobs.
 
 Use another config file:
 

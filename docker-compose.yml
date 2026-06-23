@@ -21,3 +21,4 @@ services:
 
 volumes:
   flowbridge-data:
+    name: flowbridge-data

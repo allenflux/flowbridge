@@ -285,10 +285,24 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, stepIndex int, backendTaskID string, apiKey string) (json.RawMessage, map[string]any, error) {
 	var lastRaw json.RawMessage
 	consecutiveErrors := 0
+	taskNotFoundErrors := 0
 	for {
 		raw, result, err := w.backend.GetTask(ctx, backendTaskID, apiKey)
 		if err != nil {
 			lastRaw = raw
+			if strings.Contains(err.Error(), "HTTP 404") {
+				taskNotFoundErrors++
+				_ = w.store.UpdateStepPollError(ctx, workflowTaskID, stepIndex, fmt.Sprintf("backend task not visible yet (%d/%d): %s", taskNotFoundErrors, w.cfg.MaxTaskNotFound, err.Error()), raw)
+				if taskNotFoundErrors >= w.cfg.MaxTaskNotFound {
+					return lastRaw, nil, fmt.Errorf("backend task %s not found after %d queries: %w", backendTaskID, taskNotFoundErrors, err)
+				}
+				select {
+				case <-ctx.Done():
+					return w.finalBackendCheck(backendTaskID, apiKey, lastRaw, nil, ctx.Err())
+				case <-time.After(w.cfg.PollInterval):
+					continue
+				}
+			}
 			consecutiveErrors++
 			_ = w.store.UpdateStepPollError(ctx, workflowTaskID, stepIndex, "poll backend task failed: "+err.Error(), raw)
 			if consecutiveErrors >= w.cfg.MaxPollErrors {
@@ -296,12 +310,13 @@ func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, step
 			}
 			select {
 			case <-ctx.Done():
-				return lastRaw, nil, fmt.Errorf("timeout waiting for backend task %s: %w", backendTaskID, ctx.Err())
+				return w.finalBackendCheck(backendTaskID, apiKey, lastRaw, nil, ctx.Err())
 			case <-time.After(w.cfg.PollInterval):
 				continue
 			}
 		}
 		consecutiveErrors = 0
+		taskNotFoundErrors = 0
 		lastRaw = raw
 		switch status := backendStatus(result); status {
 		case StatusSuccess:
@@ -311,22 +326,31 @@ func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, step
 		default:
 			select {
 			case <-ctx.Done():
-				return lastRaw, result, fmt.Errorf("timeout waiting for backend task %s: %w", backendTaskID, ctx.Err())
+				return w.finalBackendCheck(backendTaskID, apiKey, lastRaw, result, ctx.Err())
 			case <-time.After(w.cfg.PollInterval):
 			}
 		}
 	}
 }
 
-func backendUUIDFromRaw(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
+func (w *Worker) finalBackendCheck(backendTaskID string, apiKey string, lastRaw json.RawMessage, lastResult map[string]any, cause error) (json.RawMessage, map[string]any, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), w.cfg.HTTPTimeout)
+	defer cancel()
+	raw, result, err := w.backend.GetTask(ctx, backendTaskID, apiKey)
+	if err == nil {
+		switch backendStatus(result) {
+		case StatusSuccess:
+			return raw, result, nil
+		case StatusFailed:
+			return raw, result, fmt.Errorf("backend task %s failed with status -1", backendTaskID)
+		default:
+			return raw, result, fmt.Errorf("timeout waiting for backend task %s: %w", backendTaskID, cause)
+		}
 	}
-	var decoded map[string]any
-	if json.Unmarshal(raw, &decoded) != nil {
-		return ""
+	if lastResult != nil && backendStatus(lastResult) == StatusSuccess {
+		return lastRaw, lastResult, nil
 	}
-	return backendUUID(decoded)
+	return lastRaw, lastResult, fmt.Errorf("timeout waiting for backend task %s: %w", backendTaskID, cause)
 }
 
 func taskAPIKey(raw json.RawMessage, fallback string) string {

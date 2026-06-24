@@ -16,6 +16,7 @@ type Config struct {
 	WorkerConcurrency int           `json:"worker_concurrency"`
 	WorkerQueueSize   int           `json:"worker_queue_size"`
 	MaxPollErrors     int           `json:"max_poll_errors"`
+	MaxTaskNotFound   int           `json:"max_task_not_found"`
 	PollInterval      time.Duration `json:"-"`
 	TaskTimeout       time.Duration `json:"-"`
 	HTTPTimeout       time.Duration `json:"-"`
@@ -40,8 +41,9 @@ func defaultConfig() Config {
 		WorkerConcurrency: 4,
 		WorkerQueueSize:   10000,
 		MaxPollErrors:     10,
+		MaxTaskNotFound:   60,
 		PollInterval:      3 * time.Second,
-		TaskTimeout:       30 * time.Minute,
+		TaskTimeout:       2 * time.Hour,
 		HTTPTimeout:       30 * time.Second,
 	}
 }
@@ -53,6 +55,7 @@ type fileConfig struct {
 	WorkerConcurrency *int    `json:"worker_concurrency"`
 	WorkerQueueSize   *int    `json:"worker_queue_size"`
 	MaxPollErrors     *int    `json:"max_poll_errors"`
+	MaxTaskNotFound   *int    `json:"max_task_not_found"`
 	PollInterval      *string `json:"poll_interval"`
 	TaskTimeout       *string `json:"task_timeout"`
 	HTTPTimeout       *string `json:"http_timeout"`
@@ -88,6 +91,9 @@ func loadConfigFile(path string, cfg *Config) error {
 	if file.MaxPollErrors != nil {
 		cfg.MaxPollErrors = *file.MaxPollErrors
 	}
+	if file.MaxTaskNotFound != nil {
+		cfg.MaxTaskNotFound = *file.MaxTaskNotFound
+	}
 	if file.PollInterval != nil {
 		cfg.PollInterval = parseDuration(*file.PollInterval, cfg.PollInterval)
 	}
@@ -107,6 +113,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.WorkerConcurrency = envInt("FLOWBRIDGE_WORKERS", cfg.WorkerConcurrency)
 	cfg.WorkerQueueSize = envInt("FLOWBRIDGE_QUEUE_SIZE", cfg.WorkerQueueSize)
 	cfg.MaxPollErrors = envInt("FLOWBRIDGE_MAX_POLL_ERRORS", cfg.MaxPollErrors)
+	cfg.MaxTaskNotFound = envInt("FLOWBRIDGE_MAX_TASK_NOT_FOUND", cfg.MaxTaskNotFound)
 	cfg.PollInterval = envDuration("FLOWBRIDGE_POLL_INTERVAL", cfg.PollInterval)
 	cfg.TaskTimeout = envDuration("FLOWBRIDGE_TASK_TIMEOUT", cfg.TaskTimeout)
 	cfg.HTTPTimeout = envDuration("FLOWBRIDGE_HTTP_TIMEOUT", cfg.HTTPTimeout)
@@ -132,11 +139,14 @@ func normalizeConfig(cfg *Config) {
 	if cfg.MaxPollErrors <= 0 {
 		cfg.MaxPollErrors = 10
 	}
+	if cfg.MaxTaskNotFound <= 0 {
+		cfg.MaxTaskNotFound = 60
+	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 3 * time.Second
 	}
 	if cfg.TaskTimeout <= 0 {
-		cfg.TaskTimeout = 30 * time.Minute
+		cfg.TaskTimeout = 2 * time.Hour
 	}
 	if cfg.HTTPTimeout <= 0 {
 		cfg.HTTPTimeout = 30 * time.Second

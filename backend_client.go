@@ -106,13 +106,6 @@ func backendTaskID(resp map[string]any) string {
 	return ""
 }
 
-func backendUUID(resp map[string]any) string {
-	if value, ok := resp["uuid"].(string); ok && strings.TrimSpace(value) != "" {
-		return value
-	}
-	return ""
-}
-
 func backendStatus(resp map[string]any) int {
 	value, ok := resp["status"]
 	if !ok {

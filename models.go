@@ -56,12 +56,16 @@ type TaskDetail struct {
 
 type AnimeVideoRequest struct {
 	SourcePath         string `json:"source_path"`
+	TargetPath         string `json:"target_path"`
 	SceneName          string `json:"scene_name"`
 	VideoSceneName     string `json:"video_scene_name"`
 	IncomingPrompt     string `json:"incoming_prompt"`
 	QwenIncomingPrompt string `json:"qwen_incoming_prompt"`
 	WanIncomingPrompt  string `json:"wan_incoming_prompt"`
 	OutputFormat       string `json:"output_format"`
+	VideoFormat        string `json:"video_format"`
+	AudioEnabled       *bool  `json:"audio_enabled,omitempty"`
+	IsEncrypt          bool   `json:"is_encrypt"`
 	BID                string `json:"bid"`
 	AppID              string `json:"app_id"`
 	Fee                string `json:"fee"`
@@ -83,8 +87,12 @@ type PublicTaskResponse struct {
 	Status       int                  `json:"status"`
 	TaskType     string               `json:"task_type"`
 	SourcePath   string               `json:"source_path,omitempty"`
+	TargetPath   string               `json:"target_path,omitempty"`
 	SceneName    string               `json:"scene_name,omitempty"`
 	OutputFormat string               `json:"output_format,omitempty"`
+	VideoFormat  string               `json:"video_format,omitempty"`
+	AudioEnabled *bool                `json:"audio_enabled,omitempty"`
+	IsEncrypt    bool                 `json:"is_encrypt"`
 	CurrentStep  string               `json:"current_step,omitempty"`
 	OutData      json.RawMessage      `json:"out_data,omitempty"`
 	Error        string               `json:"error,omitempty"`

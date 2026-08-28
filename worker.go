@@ -6,20 +6,33 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
+var errBackendSubmissionUncertain = errors.New("backend submission acceptance is uncertain")
+
+type submissionVisibility uint8
+
+const (
+	submissionIndeterminate submissionVisibility = iota
+	submissionFound
+	submissionAbsent
+)
+
 type Worker struct {
-	store   *Store
-	backend *BackendClient
-	cfg     Config
-	queue   chan int64
-	seenMu  sync.Mutex
-	seen    map[int64]struct{}
+	store                    *Store
+	backend                  *BackendClient
+	cfg                      Config
+	queue                    chan int64
+	seenMu                   sync.Mutex
+	seen                     map[int64]struct{}
+	submissionRecoveryWindow time.Duration
 }
 
 func NewWorker(store *Store, backend *BackendClient, cfg Config) *Worker {
@@ -27,12 +40,17 @@ func NewWorker(store *Store, backend *BackendClient, cfg Config) *Worker {
 	if queueSize < cfg.WorkerConcurrency {
 		queueSize = cfg.WorkerConcurrency
 	}
+	recoveryWindow := cfg.HTTPTimeout + 12*time.Second
+	if recoveryWindow < 12*time.Second {
+		recoveryWindow = 12 * time.Second
+	}
 	return &Worker{
-		store:   store,
-		backend: backend,
-		cfg:     cfg,
-		queue:   make(chan int64, queueSize),
-		seen:    make(map[int64]struct{}),
+		store:                    store,
+		backend:                  backend,
+		cfg:                      cfg,
+		queue:                    make(chan int64, queueSize),
+		seen:                     make(map[int64]struct{}),
+		submissionRecoveryWindow: recoveryWindow,
 	}
 }
 
@@ -123,7 +141,7 @@ func (w *Worker) runTask(parent context.Context, id int64) error {
 	if task.Status == StatusSuccess || task.Status == StatusFailed {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(parent, w.cfg.TaskTimeout)
+	ctx, cancel := w.taskContext(parent)
 	defer cancel()
 
 	var req AnimeVideoRequest
@@ -132,27 +150,36 @@ func (w *Worker) runTask(parent context.Context, id int64) error {
 		return err
 	}
 	req.APIKey = taskAPIKey(task.RequestPayload, req.APIKey)
+	spec, videoScene, err := resolveBackendWorkflow(req)
+	if err != nil {
+		_ = w.store.MarkTaskFailed(parent, id, err.Error())
+		return err
+	}
 	if err := w.store.MarkTaskRunning(ctx, id, StepAnimeImage); err != nil {
 		return err
 	}
 
-	imageURL, err := w.ensureAnimeImage(ctx, task, req)
+	imageURL, err := w.ensureAnimeImage(ctx, task, req, spec)
 	if err != nil {
-		_ = w.store.MarkTaskFailed(parent, id, err.Error())
+		if !errors.Is(err, errBackendSubmissionUncertain) {
+			_ = w.store.MarkTaskFailed(parent, id, err.Error())
+		}
 		return err
 	}
 	if err := w.store.MarkTaskRunning(ctx, id, StepAnimeVideo); err != nil {
 		return err
 	}
-	final, err := w.ensureAnimeVideo(ctx, task, req, imageURL)
+	final, err := w.ensureAnimeVideo(ctx, task, req, spec, videoScene, imageURL)
 	if err != nil {
-		_ = w.store.MarkTaskFailed(parent, id, err.Error())
+		if !errors.Is(err, errBackendSubmissionUncertain) {
+			_ = w.store.MarkTaskFailed(parent, id, err.Error())
+		}
 		return err
 	}
 	return w.store.MarkTaskSuccess(ctx, id, final)
 }
 
-func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req AnimeVideoRequest) (string, error) {
+func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req AnimeVideoRequest, spec backendWorkflowSpec) (string, error) {
 	step, err := w.store.GetStep(ctx, task.ID, 1)
 	if err != nil {
 		return "", err
@@ -165,37 +192,32 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 		}
 	}
 
-	form := map[string]string{
-		"source_path":     req.SourcePath,
-		"scene_name":      req.SceneName,
-		"incoming_prompt": defaultString(req.QwenIncomingPrompt, req.IncomingPrompt),
-		"fee":             defaultString(req.Fee, "10"),
-		"title":           req.Title,
-		"is_encrypt":      "false",
-	}
-	if req.BID != "" {
-		form["bid"] = req.BID
-	}
-	if req.AppID != "" {
-		form["app_id"] = req.AppID
-	}
-	if req.HashKey != "" {
-		form["hash_key"] = req.HashKey
-	}
-	if req.NotifyURL != "" {
-		form["notify_url"] = req.NotifyURL
-	}
-	form = compactForm(form)
+	form := buildBackendImageForm(req, spec)
 	rawReq, _ := json.Marshal(form)
 	if err := w.store.UpdateStepStart(ctx, task.ID, 1, rawReq); err != nil {
 		return "", err
 	}
 
 	backendID := step.BackendTaskID
+	if backendID == "" && step.Status == StatusRunning {
+		rawResp, resp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, req.APIKey)
+		if visibility == submissionFound {
+			backendID = backendTaskID(resp)
+			if err := w.store.UpdateStepAccepted(ctx, task.ID, 1, backendID, rawResp); err != nil {
+				return "", err
+			}
+		} else if visibility == submissionIndeterminate {
+			err := uncertainBackendSubmissionError(form["task_id"])
+			_ = w.store.UpdateStepPollError(ctx, task.ID, 1, err.Error(), rawResp)
+			return "", err
+		}
+	}
 	if backendID == "" {
-		rawResp, resp, err := w.backend.PostForm(ctx, "/api/public/generate/undress/anime", form, req.APIKey)
+		rawResp, resp, err := w.postBackendForm(ctx, task.ID, 1, spec.ImagePath, form, req.APIKey)
 		if err != nil {
-			_ = w.store.MarkStepFailed(ctx, task.ID, 1, err.Error(), rawResp)
+			if !errors.Is(err, errBackendSubmissionUncertain) {
+				_ = w.store.MarkStepFailed(ctx, task.ID, 1, err.Error(), rawResp)
+			}
 			return "", err
 		}
 		backendID = backendTaskID(resp)
@@ -226,7 +248,88 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 	return imageURL, nil
 }
 
-func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req AnimeVideoRequest, imageURL string) (json.RawMessage, error) {
+func buildBackendImageForm(req AnimeVideoRequest, spec backendWorkflowSpec) map[string]string {
+	form := map[string]string{
+		"source_path":     req.SourcePath,
+		"scene_name":      req.SceneName,
+		"incoming_prompt": defaultString(req.QwenIncomingPrompt, req.IncomingPrompt),
+		"fee":             defaultString(req.Fee, "10"),
+		"title":           req.Title,
+		"task_id":         backendStepTaskID(req.TaskID, "image"),
+	}
+	addBackendMetadata(
+		form,
+		req,
+		spec.ImagePath != backendQwenTwoImagePath,
+		spec.VideoPath != backendLTX8sVideoPath,
+	)
+
+	if spec.ImagePath == backendQwenTwoImagePath {
+		form["target_path"] = req.TargetPath
+	} else {
+		// The intermediate image must stay directly consumable by the video step.
+		form["is_encrypt"] = "false"
+	}
+	return compactForm(form)
+}
+
+func buildBackendVideoForm(req AnimeVideoRequest, spec backendWorkflowSpec, videoScene string, imageURL string) map[string]string {
+	form := map[string]string{
+		"source_path":  imageURL,
+		"scene_name":   videoScene,
+		"fee":          defaultString(req.Fee, "10"),
+		"title":        req.Title,
+		"is_encrypt":   strconv.FormatBool(req.IsEncrypt),
+		"video_format": defaultString(req.VideoFormat, "video/h264-mp4"),
+		"task_id":      backendStepTaskID(req.TaskID, "video"),
+	}
+	addBackendMetadata(form, req, true, spec.VideoPath == backendLTX8sVideoPath)
+
+	if spec.VideoPath == backendLTX8sVideoPath {
+		form["incoming_prompt"] = defaultString(req.WanIncomingPrompt, req.IncomingPrompt)
+		form["audio_enabled"] = strconv.FormatBool(audioEnabled(req.AudioEnabled))
+	} else {
+		form["output_format"] = defaultString(req.OutputFormat, "video")
+		form["qwen_incoming_prompt"] = req.QwenIncomingPrompt
+		form["wan_incoming_prompt"] = req.WanIncomingPrompt
+	}
+	return compactForm(form)
+}
+
+func addBackendMetadata(form map[string]string, req AnimeVideoRequest, includeHashKey bool, includeNotifyURL bool) {
+	form["bid"] = req.BID
+	form["app_id"] = req.AppID
+	if includeHashKey {
+		form["hash_key"] = req.HashKey
+	}
+	if includeNotifyURL {
+		form["notify_url"] = req.NotifyURL
+	}
+}
+
+func backendStepTaskID(workflowTaskID string, step string) string {
+	workflowTaskID = strings.TrimSpace(workflowTaskID)
+	if workflowTaskID == "" {
+		return ""
+	}
+	return workflowTaskID + "_" + step
+}
+
+func audioEnabled(value *bool) bool {
+	if value == nil {
+		return true
+	}
+	return *value
+}
+
+func (w *Worker) taskContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if w.cfg.TaskTimeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, w.cfg.TaskTimeout)
+}
+
+func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req AnimeVideoRequest, spec backendWorkflowSpec, videoScene string, imageURL string) (json.RawMessage, error) {
 	step, err := w.store.GetStep(ctx, task.ID, 2)
 	if err != nil {
 		return nil, err
@@ -234,30 +337,32 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 	if step.Status == StatusSuccess && len(step.ResultPayload) > 0 {
 		return step.ResultPayload, nil
 	}
-	form := map[string]string{
-		"source_path":   imageURL,
-		"scene_name":    defaultString(req.VideoSceneName, req.SceneName),
-		"output_format": defaultString(req.OutputFormat, "video"),
-		"fee":           defaultString(req.Fee, "10"),
-		"title":         req.Title,
-	}
-	if req.QwenIncomingPrompt != "" {
-		form["qwen_incoming_prompt"] = req.QwenIncomingPrompt
-	}
-	if req.WanIncomingPrompt != "" {
-		form["wan_incoming_prompt"] = req.WanIncomingPrompt
-	}
-	form = compactForm(form)
+	form := buildBackendVideoForm(req, spec, videoScene, imageURL)
 	rawReq, _ := json.Marshal(form)
 	if err := w.store.UpdateStepStart(ctx, task.ID, 2, rawReq); err != nil {
 		return nil, err
 	}
 
 	backendID := step.BackendTaskID
+	if backendID == "" && step.Status == StatusRunning {
+		rawResp, resp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, req.APIKey)
+		if visibility == submissionFound {
+			backendID = backendTaskID(resp)
+			if err := w.store.UpdateStepAccepted(ctx, task.ID, 2, backendID, rawResp); err != nil {
+				return nil, err
+			}
+		} else if visibility == submissionIndeterminate {
+			err := uncertainBackendSubmissionError(form["task_id"])
+			_ = w.store.UpdateStepPollError(ctx, task.ID, 2, err.Error(), rawResp)
+			return nil, err
+		}
+	}
 	if backendID == "" {
-		rawResp, resp, err := w.backend.PostForm(ctx, "/api/public/generate/undress/anime/video", form, req.APIKey)
+		rawResp, resp, err := w.postBackendForm(ctx, task.ID, 2, spec.VideoPath, form, req.APIKey)
 		if err != nil {
-			_ = w.store.MarkStepFailed(ctx, task.ID, 2, err.Error(), rawResp)
+			if !errors.Is(err, errBackendSubmissionUncertain) {
+				_ = w.store.MarkStepFailed(ctx, task.ID, 2, err.Error(), rawResp)
+			}
 			return nil, err
 		}
 		backendID = backendTaskID(resp)
@@ -280,6 +385,140 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 		return nil, err
 	}
 	return rawResult, nil
+}
+
+func (w *Worker) postBackendForm(ctx context.Context, workflowTaskID int64, stepIndex int, path string, form map[string]string, apiKey string) (json.RawMessage, map[string]any, error) {
+	attempts := w.cfg.MaxSubmitRetries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastRaw json.RawMessage
+	var lastResp map[string]any
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		raw, resp, err := w.backend.PostForm(ctx, path, form, apiKey)
+		if err == nil {
+			return raw, resp, nil
+		}
+		lastRaw = raw
+		lastResp = resp
+		lastErr = err
+		if !isTransientBackendError(err) {
+			return lastRaw, lastResp, lastErr
+		}
+
+		if isAmbiguousSubmitError(err) {
+			_ = w.store.UpdateStepPollError(ctx, workflowTaskID, stepIndex, fmt.Sprintf("backend submission returned an ambiguous response; checking task_id visibility: %s", err.Error()), raw)
+			acceptedRaw, acceptedResp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, apiKey)
+			switch visibility {
+			case submissionFound:
+				return acceptedRaw, acceptedResp, nil
+			case submissionIndeterminate:
+				return lastRaw, lastResp, uncertainBackendSubmissionError(form["task_id"])
+			case submissionAbsent:
+				if attempt == attempts {
+					return lastRaw, lastResp, lastErr
+				}
+				_ = w.store.UpdateStepPollError(ctx, workflowTaskID, stepIndex, fmt.Sprintf("backend submission was not visible after the recovery window; retrying submit %d/%d: %s", attempt, attempts-1, err.Error()), raw)
+				continue
+			}
+		}
+
+		if attempt == attempts {
+			return lastRaw, lastResp, lastErr
+		}
+		delay := submitRetryDelay(attempt)
+		_ = w.store.UpdateStepPollError(ctx, workflowTaskID, stepIndex, fmt.Sprintf("submit backend step failed, retry %d/%d after %s: %s", attempt, attempts-1, delay, err.Error()), raw)
+		select {
+		case <-ctx.Done():
+			return lastRaw, lastResp, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return lastRaw, lastResp, lastErr
+}
+
+func (w *Worker) waitForBackendSubmissionVisibility(ctx context.Context, form map[string]string, apiKey string) (json.RawMessage, map[string]any, submissionVisibility) {
+	taskID := strings.TrimSpace(form["task_id"])
+	if taskID == "" {
+		return nil, nil, submissionIndeterminate
+	}
+
+	firstRaw, firstResp, firstVisibility := w.lookupBackendSubmission(ctx, taskID, apiKey)
+	if firstVisibility == submissionFound {
+		return firstRaw, firstResp, firstVisibility
+	}
+
+	window := w.submissionRecoveryWindow
+	if window <= 0 {
+		window = 12 * time.Second
+	}
+	timer := time.NewTimer(window)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return firstRaw, firstResp, submissionIndeterminate
+	case <-timer.C:
+	}
+	finalRaw, finalResp, finalVisibility := w.lookupBackendSubmission(ctx, taskID, apiKey)
+	if finalVisibility == submissionFound {
+		return finalRaw, finalResp, finalVisibility
+	}
+	if firstVisibility == submissionAbsent && finalVisibility == submissionAbsent {
+		return finalRaw, finalResp, submissionAbsent
+	}
+	return finalRaw, finalResp, submissionIndeterminate
+}
+
+func (w *Worker) lookupBackendSubmission(ctx context.Context, taskID string, apiKey string) (json.RawMessage, map[string]any, submissionVisibility) {
+	raw, resp, err := w.backend.GetTask(ctx, taskID, apiKey)
+	if err == nil {
+		if backendTaskID(resp) != "" {
+			return raw, resp, submissionFound
+		}
+		return raw, resp, submissionIndeterminate
+	}
+	if isBackendHTTPStatus(err, http.StatusNotFound) {
+		return raw, resp, submissionAbsent
+	}
+	return raw, resp, submissionIndeterminate
+}
+
+func uncertainBackendSubmissionError(taskID string) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return fmt.Errorf("%w: no task_id is available for verification", errBackendSubmissionUncertain)
+	}
+	return fmt.Errorf("%w for task_id %q", errBackendSubmissionUncertain, taskID)
+}
+
+func isBackendHTTPStatus(err error, status int) bool {
+	var backendErr *BackendHTTPError
+	return errors.As(err, &backendErr) && backendErr.StatusCode == status
+}
+
+func isTransientBackendError(err error) bool {
+	if isAmbiguousSubmitError(err) {
+		return true
+	}
+	var backendErr *BackendHTTPError
+	return errors.As(err, &backendErr) && backendErr.StatusCode == http.StatusTooManyRequests
+}
+
+func isAmbiguousSubmitError(err error) bool {
+	if errors.Is(err, errBackendSubmitOutcomeUnknown) {
+		return true
+	}
+	var backendErr *BackendHTTPError
+	return errors.As(err, &backendErr) && backendErr.StatusCode >= 500
+}
+
+func submitRetryDelay(attempt int) time.Duration {
+	delay := time.Duration(attempt*attempt) * time.Second
+	if delay > 30*time.Second {
+		return 30 * time.Second
+	}
+	return delay
 }
 
 func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, stepIndex int, backendTaskID string, apiKey string) (json.RawMessage, map[string]any, error) {
@@ -375,7 +614,7 @@ func extractURL(payload map[string]any) string {
 		}
 	}
 	preferred := []string{
-		"image_url", "file_url", "url", "video_url", "intermediate_image_url",
+		"download_url", "image_url", "file_url", "url", "video_url", "intermediate_image_url",
 	}
 	for _, key := range preferred {
 		if value, ok := payload[key].(string); ok && isLikelyURL(value) {
@@ -405,7 +644,7 @@ func extractURLValue(value any) string {
 			}
 		}
 	case map[string]any:
-		for _, key := range []string{"source_path", "image_url", "file_url", "url", "video_url", "filename"} {
+		for _, key := range []string{"download_url", "source_path", "image_url", "file_url", "url", "video_url", "filename"} {
 			if found := extractURLValue(typed[key]); found != "" {
 				return found
 			}

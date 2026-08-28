@@ -15,6 +15,7 @@ type Config struct {
 	DBPath            string        `json:"db_path"`
 	WorkerConcurrency int           `json:"worker_concurrency"`
 	WorkerQueueSize   int           `json:"worker_queue_size"`
+	MaxSubmitRetries  int           `json:"max_submit_retries"`
 	MaxPollErrors     int           `json:"max_poll_errors"`
 	MaxTaskNotFound   int           `json:"max_task_not_found"`
 	PollInterval      time.Duration `json:"-"`
@@ -40,10 +41,11 @@ func defaultConfig() Config {
 		DBPath:            "flowbridge.db",
 		WorkerConcurrency: 4,
 		WorkerQueueSize:   10000,
+		MaxSubmitRetries:  8,
 		MaxPollErrors:     10,
 		MaxTaskNotFound:   60,
 		PollInterval:      3 * time.Second,
-		TaskTimeout:       2 * time.Hour,
+		TaskTimeout:       0,
 		HTTPTimeout:       30 * time.Second,
 	}
 }
@@ -54,6 +56,7 @@ type fileConfig struct {
 	DBPath            *string `json:"db_path"`
 	WorkerConcurrency *int    `json:"worker_concurrency"`
 	WorkerQueueSize   *int    `json:"worker_queue_size"`
+	MaxSubmitRetries  *int    `json:"max_submit_retries"`
 	MaxPollErrors     *int    `json:"max_poll_errors"`
 	MaxTaskNotFound   *int    `json:"max_task_not_found"`
 	PollInterval      *string `json:"poll_interval"`
@@ -88,6 +91,9 @@ func loadConfigFile(path string, cfg *Config) error {
 	if file.WorkerQueueSize != nil {
 		cfg.WorkerQueueSize = *file.WorkerQueueSize
 	}
+	if file.MaxSubmitRetries != nil {
+		cfg.MaxSubmitRetries = *file.MaxSubmitRetries
+	}
 	if file.MaxPollErrors != nil {
 		cfg.MaxPollErrors = *file.MaxPollErrors
 	}
@@ -112,6 +118,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.DBPath = envString("FLOWBRIDGE_DB_PATH", cfg.DBPath)
 	cfg.WorkerConcurrency = envInt("FLOWBRIDGE_WORKERS", cfg.WorkerConcurrency)
 	cfg.WorkerQueueSize = envInt("FLOWBRIDGE_QUEUE_SIZE", cfg.WorkerQueueSize)
+	cfg.MaxSubmitRetries = envNonNegativeInt("FLOWBRIDGE_MAX_SUBMIT_RETRIES", cfg.MaxSubmitRetries)
 	cfg.MaxPollErrors = envInt("FLOWBRIDGE_MAX_POLL_ERRORS", cfg.MaxPollErrors)
 	cfg.MaxTaskNotFound = envInt("FLOWBRIDGE_MAX_TASK_NOT_FOUND", cfg.MaxTaskNotFound)
 	cfg.PollInterval = envDuration("FLOWBRIDGE_POLL_INTERVAL", cfg.PollInterval)
@@ -136,6 +143,9 @@ func normalizeConfig(cfg *Config) {
 	if cfg.WorkerQueueSize < cfg.WorkerConcurrency {
 		cfg.WorkerQueueSize = cfg.WorkerConcurrency
 	}
+	if cfg.MaxSubmitRetries < 0 {
+		cfg.MaxSubmitRetries = 8
+	}
 	if cfg.MaxPollErrors <= 0 {
 		cfg.MaxPollErrors = 10
 	}
@@ -145,8 +155,8 @@ func normalizeConfig(cfg *Config) {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 3 * time.Second
 	}
-	if cfg.TaskTimeout <= 0 {
-		cfg.TaskTimeout = 2 * time.Hour
+	if cfg.TaskTimeout < 0 {
+		cfg.TaskTimeout = 0
 	}
 	if cfg.HTTPTimeout <= 0 {
 		cfg.HTTPTimeout = 30 * time.Second
@@ -167,6 +177,18 @@ func envInt(key string, fallback int) int {
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func envNonNegativeInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
 		return fallback
 	}
 	return parsed

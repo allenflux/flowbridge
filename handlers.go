@@ -82,9 +82,21 @@ func (s *Server) createAnimeVideoWorkflow(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	if strings.TrimSpace(req.SourcePath) == "" {
+	req.SourcePath = strings.TrimSpace(req.SourcePath)
+	req.TargetPath = strings.TrimSpace(req.TargetPath)
+	req.SceneName = strings.TrimSpace(req.SceneName)
+	req.VideoSceneName = strings.TrimSpace(req.VideoSceneName)
+	if req.SourcePath == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "source_path is required"})
 		return
+	}
+	spec, resolvedVideoScene, err := resolveBackendWorkflow(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if _, special := tenErosBackendWorkflowSpecs[req.SceneName]; special {
+		req.VideoSceneName = resolvedVideoScene
 	}
 	taskID := strings.TrimSpace(req.TaskID)
 	if taskID == "" {
@@ -96,6 +108,13 @@ func (s *Server) createAnimeVideoWorkflow(w http.ResponseWriter, r *http.Request
 	}
 	if req.OutputFormat == "" {
 		req.OutputFormat = "video"
+	}
+	if req.VideoFormat == "" {
+		req.VideoFormat = "video/h264-mp4"
+	}
+	if spec.VideoPath == backendLTX8sVideoPath && req.AudioEnabled == nil {
+		audioEnabled := true
+		req.AudioEnabled = &audioEnabled
 	}
 	if req.QwenIncomingPrompt == "" {
 		req.QwenIncomingPrompt = req.IncomingPrompt
@@ -245,14 +264,26 @@ func parseAnimeVideoRequest(r *http.Request) (AnimeVideoRequest, error) {
 		}
 	}
 	form := r.Form
+	isEncrypt, err := parseFormBool("is_encrypt", form.Get("is_encrypt"), false)
+	if err != nil {
+		return AnimeVideoRequest{}, err
+	}
+	audioEnabled, err := parseOptionalFormBool("audio_enabled", form.Get("audio_enabled"))
+	if err != nil {
+		return AnimeVideoRequest{}, err
+	}
 	return AnimeVideoRequest{
 		SourcePath:         form.Get("source_path"),
+		TargetPath:         form.Get("target_path"),
 		SceneName:          form.Get("scene_name"),
 		VideoSceneName:     form.Get("video_scene_name"),
 		IncomingPrompt:     form.Get("incoming_prompt"),
 		QwenIncomingPrompt: form.Get("qwen_incoming_prompt"),
 		WanIncomingPrompt:  form.Get("wan_incoming_prompt"),
 		OutputFormat:       form.Get("output_format"),
+		VideoFormat:        form.Get("video_format"),
+		AudioEnabled:       audioEnabled,
+		IsEncrypt:          isEncrypt,
 		BID:                form.Get("bid"),
 		AppID:              form.Get("app_id"),
 		Fee:                form.Get("fee"),
@@ -262,6 +293,29 @@ func parseAnimeVideoRequest(r *http.Request) (AnimeVideoRequest, error) {
 		NotifyURL:          form.Get("notify_url"),
 		TaskID:             form.Get("task_id"),
 	}, nil
+}
+
+func parseFormBool(name string, value string, fallback bool) (bool, error) {
+	parsed, err := parseOptionalFormBool(name, value)
+	if err != nil {
+		return false, err
+	}
+	if parsed == nil {
+		return fallback, nil
+	}
+	return *parsed, nil
+}
+
+func parseOptionalFormBool(name string, value string) (*bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be a boolean", name)
+	}
+	return &parsed, nil
 }
 
 func taskIDFromRequest(r *http.Request) (string, error) {
@@ -306,8 +360,12 @@ func publicResponse(detail TaskDetail, req AnimeVideoRequest, includeSteps bool)
 		Status:       detail.Status,
 		TaskType:     WorkflowAnimeUndressVideo,
 		SourcePath:   req.SourcePath,
+		TargetPath:   req.TargetPath,
 		SceneName:    defaultString(req.VideoSceneName, req.SceneName),
 		OutputFormat: req.OutputFormat,
+		VideoFormat:  req.VideoFormat,
+		AudioEnabled: req.AudioEnabled,
+		IsEncrypt:    req.IsEncrypt,
 		CurrentStep:  detail.CurrentStep,
 		OutData:      detail.FinalResult,
 		Error:        detail.ErrorMessage,

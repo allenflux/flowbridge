@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,9 +11,22 @@ import (
 	"strings"
 )
 
+var errBackendSubmitOutcomeUnknown = errors.New("backend submit outcome is unknown")
+
 type BackendClient struct {
 	baseURL string
 	client  *http.Client
+}
+
+type BackendHTTPError struct {
+	Operation     string
+	StatusCode    int
+	APIKeyPresent bool
+	Body          string
+}
+
+func (e *BackendHTTPError) Error() string {
+	return fmt.Sprintf("%s returned HTTP %d apikey_present=%t: %s", e.Operation, e.StatusCode, e.APIKeyPresent, e.Body)
 }
 
 func NewBackendClient(cfg Config) *BackendClient {
@@ -38,19 +52,32 @@ func (c *BackendClient) PostForm(ctx context.Context, path string, form map[stri
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("%w: sending backend %s: %w", errBackendSubmitOutcomeUnknown, path, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return nil, nil, err
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return json.RawMessage(raw), nil, &BackendHTTPError{
+				Operation:     "backend " + path,
+				StatusCode:    resp.StatusCode,
+				APIKeyPresent: strings.TrimSpace(apiKey) != "",
+				Body:          fmt.Sprintf("%s (response read error: %v)", raw, err),
+			}
+		}
+		return json.RawMessage(raw), nil, fmt.Errorf("%w: reading backend %s HTTP %d response: %w", errBackendSubmitOutcomeUnknown, path, resp.StatusCode, err)
 	}
 	if resp.StatusCode >= 400 {
-		return json.RawMessage(raw), nil, fmt.Errorf("backend %s returned HTTP %d apikey_present=%t: %s", path, resp.StatusCode, strings.TrimSpace(apiKey) != "", string(raw))
+		return json.RawMessage(raw), nil, &BackendHTTPError{
+			Operation:     "backend " + path,
+			StatusCode:    resp.StatusCode,
+			APIKeyPresent: strings.TrimSpace(apiKey) != "",
+			Body:          string(raw),
+		}
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return json.RawMessage(raw), nil, fmt.Errorf("backend %s returned invalid JSON: %w", path, err)
+		return json.RawMessage(raw), nil, fmt.Errorf("%w: backend %s returned invalid JSON: %w", errBackendSubmitOutcomeUnknown, path, err)
 	}
 	return json.RawMessage(raw), decoded, nil
 }
@@ -79,7 +106,12 @@ func (c *BackendClient) GetTask(ctx context.Context, taskID string, apiKey strin
 		return nil, nil, err
 	}
 	if resp.StatusCode >= 400 {
-		return json.RawMessage(raw), nil, fmt.Errorf("backend task query returned HTTP %d apikey_present=%t: %s", resp.StatusCode, strings.TrimSpace(apiKey) != "", string(raw))
+		return json.RawMessage(raw), nil, &BackendHTTPError{
+			Operation:     "backend task query",
+			StatusCode:    resp.StatusCode,
+			APIKeyPresent: strings.TrimSpace(apiKey) != "",
+			Body:          string(raw),
+		}
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {

@@ -124,18 +124,36 @@ curl --location 'http://127.0.0.1:8080/api/public/generate/undress/anime/video' 
   --data-urlencode 'output_format=video'
 ```
 
-### One-to-one 10Eros image-to-video scenes
+### Dedicated one-to-one 10Eros image-to-video API
 
-The same FlowBridge endpoint also orchestrates these scene-specific pipelines:
+The four 10Eros pipelines use a separate FlowBridge endpoint:
+
+```text
+POST /api/public/generate/10eros/image-to-video
+```
+
+See the [Chinese API guide](docs/10eros-image-to-video-api.md) and the [YApi-importable Swagger file](docs/flowbridge-10eros-openapi.json) for the complete contract.
+
+Do not submit these four scenes to the legacy `/api/public/generate/undress/anime/video` route. That route remains dedicated to the original anime-undress workflow and rejects 10Eros scenes with a pointer to the new endpoint.
+
+The dedicated endpoint orchestrates these scene-specific pipelines:
 
 | `scene_name` | Image step | Video step |
 | --- | --- | --- |
-| `gay_doggy_10eros` | `/api/public/generate/undress/anime` | `/api/public/generate/videos/scenes/8s/ltx` |
+| `gay_doggy_10eros` | `/api/public/generate/qwen/two-image` | `/api/public/generate/videos/scenes/8s/ltx` |
 | `gay_cumshot_10eros` | `/api/public/generate/undress/anime` | `/api/public/generate/videos/scenes/8s/ltx` |
 | `gay_anal_creampie_10eros` | `/api/public/generate/undress/anime` | `/api/public/generate/videos/scenes/8s/ltx` |
 | `lesbian_kiss_10eros` | `/api/public/generate/qwen/two-image` | `/api/public/generate/videos/scenes/8s/ltx` |
 
-For these four scenes, the image and video scene names are locked one-to-one. Omit `video_scene_name`, or pass the same value as `scene_name`. `lesbian_kiss_10eros` additionally requires `target_path` for the second input image.
+For these four scenes, the image and video scene names are locked one-to-one. Omit `video_scene_name`, or pass the same value as `scene_name`. Both `gay_doggy_10eros` and `lesbian_kiss_10eros` require `target_path` for the second input image.
+
+```mermaid
+flowchart LR
+    A["source_path + target_path<br/>Doggy / Lesbian"] --> B["Qwen two-image<br/>is_encrypt=false<br/>is_watermark=false"]
+    C["source_path<br/>Cumshot / Anal"] --> D["Undress Anime image<br/>is_encrypt=false<br/>is_watermark=false"]
+    B --> E["LTX 8s video<br/>final encryption and watermark settings"]
+    D --> E
+```
 
 The extended parameters are:
 
@@ -143,14 +161,15 @@ The extended parameters are:
 - `wan_incoming_prompt`: LTX video-step prompt; falls back to `incoming_prompt`.
 - `audio_enabled`: LTX audio switch, default `true`; explicit `false` is preserved.
 - `video_format`: `video/h264-mp4` (default) or `video/h265-mp4`.
-- `is_encrypt`: controls the final video. The intermediate image is always unencrypted so its URL can be consumed by LTX.
+- `is_encrypt`: controls the final video. The intermediate image is always explicitly unencrypted so its URL can be consumed by LTX. This also applies to the Qwen two-image route's new encryption parameter.
+- `is_watermark` (alias `watermark`): controls only the final video and defaults to `true`. Every intermediate image is explicitly generated with `is_watermark=false`, so a watermark is never applied twice.
 - `bid`, `app_id`, `fee`, `title`, and `hash_key` are forwarded where the selected backend endpoint supports them.
 - For these composed scenes, `notify_url` is sent only to the final LTX step, avoiding an intermediate-image callback followed by a second video callback.
 
 Two-image example:
 
 ```bash
-curl --location 'http://127.0.0.1:8080/api/public/generate/undress/anime/video' \
+curl --location 'http://127.0.0.1:8080/api/public/generate/10eros/image-to-video' \
   --header 'Accept: application/json' \
   --header 'Content-Type: application/x-www-form-urlencoded' \
   --header 'Apikey: your-user-api-key' \
@@ -160,6 +179,7 @@ curl --location 'http://127.0.0.1:8080/api/public/generate/undress/anime/video' 
   --data-urlencode 'qwen_incoming_prompt=' \
   --data-urlencode 'wan_incoming_prompt=' \
   --data-urlencode 'audio_enabled=true' \
+  --data-urlencode 'is_watermark=true' \
   --data-urlencode 'is_encrypt=false' \
   --data-urlencode 'video_format=video/h264-mp4'
 ```

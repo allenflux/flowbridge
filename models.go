@@ -14,6 +14,7 @@ const (
 
 const (
 	WorkflowAnimeUndressVideo = "anime_undress_video"
+	WorkflowTenErosImageVideo = "10eros_image_to_video"
 	StepAnimeImage            = "anime_image"
 	StepAnimeVideo            = "anime_video"
 )
@@ -65,6 +66,7 @@ type AnimeVideoRequest struct {
 	OutputFormat       string `json:"output_format"`
 	VideoFormat        string `json:"video_format"`
 	AudioEnabled       *bool  `json:"audio_enabled,omitempty"`
+	IsWatermark        *bool  `json:"is_watermark,omitempty"`
 	IsEncrypt          bool   `json:"is_encrypt"`
 	BID                string `json:"bid"`
 	AppID              string `json:"app_id"`
@@ -92,6 +94,7 @@ type PublicTaskResponse struct {
 	OutputFormat string               `json:"output_format,omitempty"`
 	VideoFormat  string               `json:"video_format,omitempty"`
 	AudioEnabled *bool                `json:"audio_enabled,omitempty"`
+	IsWatermark  *bool                `json:"is_watermark,omitempty"`
 	IsEncrypt    bool                 `json:"is_encrypt"`
 	CurrentStep  string               `json:"current_step,omitempty"`
 	OutData      json.RawMessage      `json:"out_data,omitempty"`

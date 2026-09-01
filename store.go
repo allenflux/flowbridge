@@ -81,6 +81,10 @@ func (s *Store) migrate(ctx context.Context) error {
 
 func (s *Store) CreateAnimeVideoTask(ctx context.Context, taskID string, req AnimeVideoRequest, raw json.RawMessage) (*WorkflowTask, error) {
 	now := time.Now().UTC()
+	workflowType := WorkflowAnimeUndressVideo
+	if _, ok := tenErosBackendWorkflowSpecs[req.SceneName]; ok {
+		workflowType = WorkflowTenErosImageVideo
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -90,7 +94,7 @@ func (s *Store) CreateAnimeVideoTask(ctx context.Context, taskID string, req Ani
 	result, err := tx.ExecContext(ctx, `INSERT INTO workflow_tasks
 		(task_id, workflow_type, status, current_step, request_payload, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		taskID, WorkflowAnimeUndressVideo, StatusPending, StepAnimeImage, string(raw), now, now)
+		taskID, workflowType, StatusPending, StepAnimeImage, string(raw), now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +121,7 @@ func (s *Store) CreateAnimeVideoTask(ctx context.Context, taskID string, req Ani
 		return nil, err
 	}
 	return &WorkflowTask{
-		ID: id, TaskID: taskID, WorkflowType: WorkflowAnimeUndressVideo, Status: StatusPending,
+		ID: id, TaskID: taskID, WorkflowType: workflowType, Status: StatusPending,
 		CurrentStep: StepAnimeImage, RequestPayload: raw, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }

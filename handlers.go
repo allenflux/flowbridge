@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+const publicTenErosImageToVideoPath = "/api/public/generate/10eros/image-to-video"
+
 type Server struct {
 	cfg    Config
 	store  *Store
@@ -58,6 +60,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("POST /api/public/generate/undress/anime/video", s.createAnimeVideoWorkflow)
 	s.mux.HandleFunc("POST /api/public/workflow/undress/anime/video", s.createAnimeVideoWorkflow)
+	s.mux.HandleFunc("POST "+publicTenErosImageToVideoPath, s.createTenErosImageToVideoWorkflow)
 	s.mux.HandleFunc("GET /api/public/task", s.getPublicTask)
 	s.mux.HandleFunc("POST /api/public/task", s.getPublicTask)
 	s.mux.HandleFunc("GET /admin/workflows", s.adminList)
@@ -72,6 +75,14 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createAnimeVideoWorkflow(w http.ResponseWriter, r *http.Request) {
+	s.createImageToVideoWorkflow(w, r, false)
+}
+
+func (s *Server) createTenErosImageToVideoWorkflow(w http.ResponseWriter, r *http.Request) {
+	s.createImageToVideoWorkflow(w, r, true)
+}
+
+func (s *Server) createImageToVideoWorkflow(w http.ResponseWriter, r *http.Request, tenErosOnly bool) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -90,12 +101,29 @@ func (s *Server) createAnimeVideoWorkflow(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "source_path is required"})
 		return
 	}
+	_, isTenEros := tenErosBackendWorkflowSpecs[req.SceneName]
+	if tenErosOnly && !isTenEros {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "scene_name is not supported by the 10eros image-to-video workflow",
+		})
+		return
+	}
+	if !tenErosOnly && isTenEros {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("scene_name %q must use %s", req.SceneName, publicTenErosImageToVideoPath),
+		})
+		return
+	}
+	if tenErosOnly && strings.TrimSpace(req.APIKey) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Apikey is required"})
+		return
+	}
 	spec, resolvedVideoScene, err := resolveBackendWorkflow(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	if _, special := tenErosBackendWorkflowSpecs[req.SceneName]; special {
+	if isTenEros {
 		req.VideoSceneName = resolvedVideoScene
 	}
 	taskID := strings.TrimSpace(req.TaskID)
@@ -106,15 +134,25 @@ func (s *Server) createAnimeVideoWorkflow(w http.ResponseWriter, r *http.Request
 	if req.Fee == "" {
 		req.Fee = "10"
 	}
-	if req.OutputFormat == "" {
+	if !tenErosOnly && req.OutputFormat == "" {
 		req.OutputFormat = "video"
 	}
 	if req.VideoFormat == "" {
 		req.VideoFormat = "video/h264-mp4"
 	}
+	if tenErosOnly && req.VideoFormat != "video/h264-mp4" && req.VideoFormat != "video/h265-mp4" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "video_format must be video/h264-mp4 or video/h265-mp4",
+		})
+		return
+	}
 	if spec.VideoPath == backendLTX8sVideoPath && req.AudioEnabled == nil {
 		audioEnabled := true
 		req.AudioEnabled = &audioEnabled
+	}
+	if req.IsWatermark == nil {
+		isWatermark := true
+		req.IsWatermark = &isWatermark
 	}
 	if req.QwenIncomingPrompt == "" {
 		req.QwenIncomingPrompt = req.IncomingPrompt
@@ -255,6 +293,15 @@ func parseAnimeVideoRequest(r *http.Request) (AnimeVideoRequest, error) {
 		if err := json.Unmarshal(body, &req); err != nil {
 			return req, err
 		}
+		if req.IsWatermark == nil {
+			var aliases struct {
+				Watermark *bool `json:"watermark"`
+			}
+			if err := json.Unmarshal(body, &aliases); err != nil {
+				return req, err
+			}
+			req.IsWatermark = aliases.Watermark
+		}
 		req.APIKey = firstNonEmpty(req.APIKey, r.Header.Get("Apikey"), r.Header.Get("X-API-Key"))
 		return req, nil
 	}
@@ -272,6 +319,13 @@ func parseAnimeVideoRequest(r *http.Request) (AnimeVideoRequest, error) {
 	if err != nil {
 		return AnimeVideoRequest{}, err
 	}
+	isWatermark, err := parseOptionalFormBool(
+		"is_watermark",
+		firstNonEmpty(form.Get("is_watermark"), form.Get("watermark")),
+	)
+	if err != nil {
+		return AnimeVideoRequest{}, err
+	}
 	return AnimeVideoRequest{
 		SourcePath:         form.Get("source_path"),
 		TargetPath:         form.Get("target_path"),
@@ -283,6 +337,7 @@ func parseAnimeVideoRequest(r *http.Request) (AnimeVideoRequest, error) {
 		OutputFormat:       form.Get("output_format"),
 		VideoFormat:        form.Get("video_format"),
 		AudioEnabled:       audioEnabled,
+		IsWatermark:        isWatermark,
 		IsEncrypt:          isEncrypt,
 		BID:                form.Get("bid"),
 		AppID:              form.Get("app_id"),
@@ -358,13 +413,14 @@ func publicResponse(detail TaskDetail, req AnimeVideoRequest, includeSteps bool)
 		Title:        req.Title,
 		NotifyURL:    req.NotifyURL,
 		Status:       detail.Status,
-		TaskType:     WorkflowAnimeUndressVideo,
+		TaskType:     detail.WorkflowType,
 		SourcePath:   req.SourcePath,
 		TargetPath:   req.TargetPath,
 		SceneName:    defaultString(req.VideoSceneName, req.SceneName),
 		OutputFormat: req.OutputFormat,
 		VideoFormat:  req.VideoFormat,
 		AudioEnabled: req.AudioEnabled,
+		IsWatermark:  req.IsWatermark,
 		IsEncrypt:    req.IsEncrypt,
 		CurrentStep:  detail.CurrentStep,
 		OutData:      detail.FinalResult,

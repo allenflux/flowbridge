@@ -25,8 +25,9 @@ var defaultBackendWorkflowSpec = backendWorkflowSpec{
 
 var tenErosBackendWorkflowSpecs = map[string]backendWorkflowSpec{
 	"gay_doggy_10eros": {
-		ImagePath: backendUndressAnimeImagePath,
-		VideoPath: backendLTX8sVideoPath,
+		ImagePath:          backendQwenTwoImagePath,
+		VideoPath:          backendLTX8sVideoPath,
+		RequiresTargetPath: true,
 	},
 	"gay_cumshot_10eros": {
 		ImagePath: backendUndressAnimeImagePath,

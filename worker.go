@@ -255,6 +255,8 @@ func buildBackendImageForm(req AnimeVideoRequest, spec backendWorkflowSpec) map[
 		"incoming_prompt": defaultString(req.QwenIncomingPrompt, req.IncomingPrompt),
 		"fee":             defaultString(req.Fee, "10"),
 		"title":           req.Title,
+		"is_encrypt":      "false",
+		"is_watermark":    "false",
 		"task_id":         backendStepTaskID(req.TaskID, "image"),
 	}
 	addBackendMetadata(
@@ -266,9 +268,6 @@ func buildBackendImageForm(req AnimeVideoRequest, spec backendWorkflowSpec) map[
 
 	if spec.ImagePath == backendQwenTwoImagePath {
 		form["target_path"] = req.TargetPath
-	} else {
-		// The intermediate image must stay directly consumable by the video step.
-		form["is_encrypt"] = "false"
 	}
 	return compactForm(form)
 }
@@ -280,6 +279,7 @@ func buildBackendVideoForm(req AnimeVideoRequest, spec backendWorkflowSpec, vide
 		"fee":          defaultString(req.Fee, "10"),
 		"title":        req.Title,
 		"is_encrypt":   strconv.FormatBool(req.IsEncrypt),
+		"is_watermark": strconv.FormatBool(watermarkEnabled(req.IsWatermark)),
 		"video_format": defaultString(req.VideoFormat, "video/h264-mp4"),
 		"task_id":      backendStepTaskID(req.TaskID, "video"),
 	}
@@ -316,6 +316,13 @@ func backendStepTaskID(workflowTaskID string, step string) string {
 }
 
 func audioEnabled(value *bool) bool {
+	if value == nil {
+		return true
+	}
+	return *value
+}
+
+func watermarkEnabled(value *bool) bool {
 	if value == nil {
 		return true
 	}

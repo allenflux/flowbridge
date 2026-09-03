@@ -189,6 +189,17 @@ Query bridge task:
 ```text
 GET /api/public/task?task_id=bridge_xxx
 POST /api/public/task
+POST /api/public/task/details
+```
+
+Batch query uses the same root JSON-array contract as the backend public API, with at most 1,000 task IDs per request. Results follow the first occurrence of each requested task ID; unknown IDs are omitted unless none of the requested tasks exist.
+
+```bash
+curl --location 'http://127.0.0.1:8080/api/public/task/details' \
+  --header 'Accept: application/json' \
+  --header 'Content-Type: application/json' \
+  --header 'Apikey: your-user-api-key' \
+  --data '["bridge_task_a", "bridge_task_b"]'
 ```
 
 Admin console:

@@ -17,7 +17,11 @@ import (
 	"time"
 )
 
-const publicTenErosImageToVideoPath = "/api/public/generate/10eros/image-to-video"
+const (
+	publicTenErosImageToVideoPath = "/api/public/generate/10eros/image-to-video"
+	publicTaskDetailsPath         = "/api/public/task/details"
+	maxPublicTaskDetailsIDs       = 1000
+)
 
 type Server struct {
 	cfg    Config
@@ -63,6 +67,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+publicTenErosImageToVideoPath, s.createTenErosImageToVideoWorkflow)
 	s.mux.HandleFunc("GET /api/public/task", s.getPublicTask)
 	s.mux.HandleFunc("POST /api/public/task", s.getPublicTask)
+	s.mux.HandleFunc("POST "+publicTaskDetailsPath, s.getPublicTaskDetails)
 	s.mux.HandleFunc("GET /admin/workflows", s.adminList)
 	s.mux.HandleFunc("GET /admin/workflows/", s.adminDetail)
 	s.mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +190,69 @@ func (s *Server) getPublicTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, publicTaskQueryResponse(*detail))
+}
+
+func (s *Server) getPublicTaskDetails(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var taskIDs []string
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&taskIDs); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "ids must be a JSON array of task_id strings",
+		})
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "ids must be a single JSON array of task_id strings",
+		})
+		return
+	}
+
+	if len(taskIDs) > maxPublicTaskDetailsIDs {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("too many ids; maximum is %d", maxPublicTaskDetailsIDs),
+		})
+		return
+	}
+	taskIDs = normalizeTaskIDs(taskIDs)
+	if len(taskIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "ids required"})
+		return
+	}
+	tasks, err := s.store.GetTasksByTaskIDs(r.Context(), taskIDs)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if len(tasks) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "tasks not found"})
+		return
+	}
+
+	responses := make([]any, 0, len(tasks))
+	for _, task := range tasks {
+		responses = append(responses, publicTaskQueryResponse(TaskDetail{WorkflowTask: task}))
+	}
+	writeJSON(w, http.StatusOK, responses)
+}
+
+func normalizeTaskIDs(taskIDs []string) []string {
+	normalized := make([]string, 0, len(taskIDs))
+	seen := make(map[string]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			continue
+		}
+		if _, exists := seen[taskID]; exists {
+			continue
+		}
+		seen[taskID] = struct{}{}
+		normalized = append(normalized, taskID)
+	}
+	return normalized
 }
 
 func (s *Server) adminList(w http.ResponseWriter, r *http.Request) {

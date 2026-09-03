@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -144,6 +145,71 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64) (*WorkflowTask, error
 	return s.getTaskByQuery(ctx, `SELECT id, task_id, workflow_type, status, current_step, request_payload,
 		COALESCE(final_result, ''), error_message, created_at, updated_at, finished_at
 		FROM workflow_tasks WHERE id = ?`, id)
+}
+
+func (s *Store) GetTasksByTaskIDs(ctx context.Context, taskIDs []string) ([]WorkflowTask, error) {
+	if len(taskIDs) == 0 {
+		return []WorkflowTask{}, nil
+	}
+
+	const queryChunkSize = 500
+	found := make(map[string]WorkflowTask, len(taskIDs))
+	for start := 0; start < len(taskIDs); start += queryChunkSize {
+		end := start + queryChunkSize
+		if end > len(taskIDs) {
+			end = len(taskIDs)
+		}
+		chunk := taskIDs[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]any, len(chunk))
+		for index, taskID := range chunk {
+			placeholders[index] = "?"
+			args[index] = taskID
+		}
+		query := `SELECT id, task_id, workflow_type, status, current_step, request_payload,
+			COALESCE(final_result, ''), error_message, created_at, updated_at, finished_at
+			FROM workflow_tasks WHERE task_id IN (` + strings.Join(placeholders, ",") + `)`
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var task WorkflowTask
+			var requestPayload string
+			var finalResult string
+			var finishedAt sql.NullTime
+			if err := rows.Scan(
+				&task.ID, &task.TaskID, &task.WorkflowType, &task.Status, &task.CurrentStep,
+				&requestPayload, &finalResult, &task.ErrorMessage, &task.CreatedAt, &task.UpdatedAt, &finishedAt,
+			); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			task.RequestPayload = json.RawMessage(requestPayload)
+			if finalResult != "" {
+				task.FinalResult = json.RawMessage(finalResult)
+			}
+			if finishedAt.Valid {
+				task.FinishedAt = &finishedAt.Time
+			}
+			found[task.TaskID] = task
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+
+	tasks := make([]WorkflowTask, 0, len(found))
+	for _, taskID := range taskIDs {
+		if task, exists := found[taskID]; exists {
+			tasks = append(tasks, task)
+		}
+	}
+	return tasks, nil
 }
 
 func (s *Store) getTaskByQuery(ctx context.Context, query string, arg any) (*WorkflowTask, error) {

@@ -31,6 +31,7 @@ type WorkflowTask struct {
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 	FinishedAt     *time.Time      `json:"finished_at,omitempty"`
+	DeadlineAnchor time.Time       `json:"-"`
 }
 
 type WorkflowStepRecord struct {

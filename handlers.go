@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -29,14 +30,17 @@ type Server struct {
 	worker *Worker
 	mux    *http.ServeMux
 	admin  *template.Template
+	create chan struct{}
 }
 
 func NewServer(cfg Config, store *Store, worker *Worker) *Server {
+	normalizeConfig(&cfg)
 	s := &Server{
 		cfg:    cfg,
 		store:  store,
 		worker: worker,
 		mux:    http.NewServeMux(),
+		create: make(chan struct{}, 1),
 		admin: template.Must(template.New("admin.html").Funcs(template.FuncMap{
 			"statusText":  statusText,
 			"statusClass": statusClass,
@@ -51,6 +55,14 @@ func NewServer(cfg Config, store *Store, worker *Worker) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	requestTimeout := s.cfg.RequestTimeout
+	if requestTimeout <= 0 {
+		requestTimeout = defaultRequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			log.Printf("panic serving %s %s: %v\n%s", r.Method, r.URL.Path, recovered, debug.Stack())
@@ -62,6 +74,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
+	s.mux.HandleFunc("GET /readyz", s.ready)
+	s.mux.HandleFunc("GET /favicon.svg", s.favicon)
 	s.mux.HandleFunc("POST /api/public/generate/undress/anime/video", s.createAnimeVideoWorkflow)
 	s.mux.HandleFunc("POST /api/public/workflow/undress/anime/video", s.createAnimeVideoWorkflow)
 	s.mux.HandleFunc("POST "+publicTenErosImageToVideoPath, s.createTenErosImageToVideoWorkflow)
@@ -77,6 +91,40 @@ func (s *Server) routes() {
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) favicon(w http.ResponseWriter, r *http.Request) {
+	icon, err := templateFS.ReadFile("static/favicon.svg")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+	w.Header().Set("Content-Length", strconv.Itoa(len(icon)))
+	_, _ = w.Write(icon)
+}
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.Ping(r.Context()); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "database unavailable"})
+		return
+	}
+	runnableTasks, err := s.store.CountRunnableTasks(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "database unavailable"})
+		return
+	}
+	queueDepth, queueCapacity := s.worker.QueueStats()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":                 true,
+		"accepting_tasks":    runnableTasks < s.cfg.MaxRunnableTasks,
+		"queue_depth":        queueDepth,
+		"queue_capacity":     queueCapacity,
+		"runnable_tasks":     runnableTasks,
+		"max_runnable_tasks": s.cfg.MaxRunnableTasks,
+		"workers":            s.cfg.WorkerConcurrency,
+	})
 }
 
 func (s *Server) createAnimeVideoWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -163,12 +211,41 @@ func (s *Server) createImageToVideoWorkflow(w http.ResponseWriter, r *http.Reque
 		req.QwenIncomingPrompt = req.IncomingPrompt
 	}
 	raw, _ := json.Marshal(req)
+	select {
+	case s.create <- struct{}{}:
+		defer func() { <-s.create }()
+	case <-r.Context().Done():
+		writeRequestTimeout(w, r.Context().Err())
+		return
+	}
+	runnableTasks, err := s.store.CountRunnableTasks(r.Context())
+	if err != nil {
+		if writeRequestTimeout(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if runnableTasks >= s.cfg.MaxRunnableTasks {
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error":              "workflow backlog is full; retry later",
+			"runnable_tasks":     runnableTasks,
+			"max_runnable_tasks": s.cfg.MaxRunnableTasks,
+		})
+		return
+	}
 	task, err := s.store.CreateAnimeVideoTask(r.Context(), taskID, req, raw)
 	if err != nil {
+		if writeRequestTimeout(w, err) {
+			return
+		}
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
-	s.worker.Enqueue(task.ID)
+	if !s.worker.Enqueue(task.ID) {
+		log.Printf("worker queue is full; persisted workflow task %d will be recovered from SQLite", task.ID)
+	}
 	resp := publicResponse(TaskDetail{WorkflowTask: *task}, req, false)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -180,16 +257,19 @@ func (s *Server) getPublicTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	detail, err := s.store.GetTaskDetail(r.Context(), taskID)
+	task, err := s.store.GetPublicTask(r.Context(), taskID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "task not found"})
 			return
 		}
+		if writeRequestTimeout(w, err) {
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, publicTaskQueryResponse(*detail))
+	writeJSON(w, http.StatusOK, publicTaskQueryResponse(TaskDetail{WorkflowTask: *task}))
 }
 
 func (s *Server) getPublicTaskDetails(w http.ResponseWriter, r *http.Request) {
@@ -223,6 +303,15 @@ func (s *Server) getPublicTaskDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	tasks, err := s.store.GetTasksByTaskIDs(r.Context(), taskIDs)
 	if err != nil {
+		if errors.Is(err, ErrBatchResultTooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+				"error": fmt.Sprintf("combined task results exceed the %d MiB response limit", maxBatchResultPayloadBytes>>20),
+			})
+			return
+		}
+		if writeRequestTimeout(w, err) {
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -258,7 +347,7 @@ func normalizeTaskIDs(taskIDs []string) []string {
 func (s *Server) adminList(w http.ResponseWriter, r *http.Request) {
 	queryTaskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
 	if queryTaskID != "" {
-		if _, err := s.store.GetTaskDetail(r.Context(), queryTaskID); err == nil {
+		if _, err := s.store.GetPublicTask(r.Context(), queryTaskID); err == nil {
 			http.Redirect(w, r, "/admin/workflows/"+queryTaskID, http.StatusFound)
 			return
 		}
@@ -276,6 +365,9 @@ func (s *Server) adminList(w http.ResponseWriter, r *http.Request) {
 	}
 	total, err := s.store.CountTasks(r.Context())
 	if err != nil {
+		if writeRequestTimeout(w, err) {
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -289,6 +381,9 @@ func (s *Server) adminList(w http.ResponseWriter, r *http.Request) {
 	offset := (page - 1) * pageSize
 	tasks, err := s.store.ListTasks(r.Context(), pageSize, offset)
 	if err != nil {
+		if writeRequestTimeout(w, err) {
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -334,6 +429,9 @@ func (s *Server) adminDetail(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			http.NotFound(w, r)
+			return
+		}
+		if writeRequestTimeout(w, err) {
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -507,11 +605,10 @@ func publicResponse(detail TaskDetail, req AnimeVideoRequest, includeSteps bool)
 
 func publicTaskQueryResponse(detail TaskDetail) any {
 	if detail.Status == StatusSuccess && len(detail.FinalResult) > 0 {
-		var final any
-		if err := json.Unmarshal(detail.FinalResult, &final); err == nil {
-			return final
+		if json.Valid(detail.FinalResult) {
+			return json.RawMessage(detail.FinalResult)
 		}
-		return detail.FinalResult
+		return string(detail.FinalResult)
 	}
 	resp := map[string]any{
 		"task_id":      detail.TaskID,
@@ -565,6 +662,15 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeRequestTimeout(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		return false
+	}
+	w.Header().Set("Retry-After", "1")
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "request timed out"})
+	return true
 }
 
 func randomHex(bytesLen int) string {

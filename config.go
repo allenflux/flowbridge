@@ -9,16 +9,23 @@ import (
 	"time"
 )
 
+const (
+	defaultRequestTimeout = 15 * time.Second
+	defaultTaskTimeout    = 30 * time.Minute
+)
+
 type Config struct {
 	Addr              string        `json:"addr"`
 	BackendBaseURL    string        `json:"backend_base_url"`
 	DBPath            string        `json:"db_path"`
 	WorkerConcurrency int           `json:"worker_concurrency"`
 	WorkerQueueSize   int           `json:"worker_queue_size"`
+	MaxRunnableTasks  int           `json:"max_runnable_tasks"`
 	MaxSubmitRetries  int           `json:"max_submit_retries"`
 	MaxPollErrors     int           `json:"max_poll_errors"`
 	MaxTaskNotFound   int           `json:"max_task_not_found"`
 	PollInterval      time.Duration `json:"-"`
+	RequestTimeout    time.Duration `json:"-"`
 	TaskTimeout       time.Duration `json:"-"`
 	HTTPTimeout       time.Duration `json:"-"`
 }
@@ -41,11 +48,13 @@ func defaultConfig() Config {
 		DBPath:            "flowbridge.db",
 		WorkerConcurrency: 4,
 		WorkerQueueSize:   10000,
+		MaxRunnableTasks:  10000,
 		MaxSubmitRetries:  8,
 		MaxPollErrors:     10,
 		MaxTaskNotFound:   60,
 		PollInterval:      3 * time.Second,
-		TaskTimeout:       0,
+		RequestTimeout:    defaultRequestTimeout,
+		TaskTimeout:       defaultTaskTimeout,
 		HTTPTimeout:       30 * time.Second,
 	}
 }
@@ -56,10 +65,12 @@ type fileConfig struct {
 	DBPath            *string `json:"db_path"`
 	WorkerConcurrency *int    `json:"worker_concurrency"`
 	WorkerQueueSize   *int    `json:"worker_queue_size"`
+	MaxRunnableTasks  *int    `json:"max_runnable_tasks"`
 	MaxSubmitRetries  *int    `json:"max_submit_retries"`
 	MaxPollErrors     *int    `json:"max_poll_errors"`
 	MaxTaskNotFound   *int    `json:"max_task_not_found"`
 	PollInterval      *string `json:"poll_interval"`
+	RequestTimeout    *string `json:"request_timeout"`
 	TaskTimeout       *string `json:"task_timeout"`
 	HTTPTimeout       *string `json:"http_timeout"`
 }
@@ -91,6 +102,9 @@ func loadConfigFile(path string, cfg *Config) error {
 	if file.WorkerQueueSize != nil {
 		cfg.WorkerQueueSize = *file.WorkerQueueSize
 	}
+	if file.MaxRunnableTasks != nil {
+		cfg.MaxRunnableTasks = *file.MaxRunnableTasks
+	}
 	if file.MaxSubmitRetries != nil {
 		cfg.MaxSubmitRetries = *file.MaxSubmitRetries
 	}
@@ -102,6 +116,9 @@ func loadConfigFile(path string, cfg *Config) error {
 	}
 	if file.PollInterval != nil {
 		cfg.PollInterval = parseDuration(*file.PollInterval, cfg.PollInterval)
+	}
+	if file.RequestTimeout != nil {
+		cfg.RequestTimeout = parseDuration(*file.RequestTimeout, cfg.RequestTimeout)
 	}
 	if file.TaskTimeout != nil {
 		cfg.TaskTimeout = parseDuration(*file.TaskTimeout, cfg.TaskTimeout)
@@ -118,10 +135,12 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.DBPath = envString("FLOWBRIDGE_DB_PATH", cfg.DBPath)
 	cfg.WorkerConcurrency = envInt("FLOWBRIDGE_WORKERS", cfg.WorkerConcurrency)
 	cfg.WorkerQueueSize = envInt("FLOWBRIDGE_QUEUE_SIZE", cfg.WorkerQueueSize)
+	cfg.MaxRunnableTasks = envInt("FLOWBRIDGE_MAX_RUNNABLE_TASKS", cfg.MaxRunnableTasks)
 	cfg.MaxSubmitRetries = envNonNegativeInt("FLOWBRIDGE_MAX_SUBMIT_RETRIES", cfg.MaxSubmitRetries)
 	cfg.MaxPollErrors = envInt("FLOWBRIDGE_MAX_POLL_ERRORS", cfg.MaxPollErrors)
 	cfg.MaxTaskNotFound = envInt("FLOWBRIDGE_MAX_TASK_NOT_FOUND", cfg.MaxTaskNotFound)
 	cfg.PollInterval = envDuration("FLOWBRIDGE_POLL_INTERVAL", cfg.PollInterval)
+	cfg.RequestTimeout = envDuration("FLOWBRIDGE_REQUEST_TIMEOUT", cfg.RequestTimeout)
 	cfg.TaskTimeout = envDuration("FLOWBRIDGE_TASK_TIMEOUT", cfg.TaskTimeout)
 	cfg.HTTPTimeout = envDuration("FLOWBRIDGE_HTTP_TIMEOUT", cfg.HTTPTimeout)
 }
@@ -143,6 +162,9 @@ func normalizeConfig(cfg *Config) {
 	if cfg.WorkerQueueSize < cfg.WorkerConcurrency {
 		cfg.WorkerQueueSize = cfg.WorkerConcurrency
 	}
+	if cfg.MaxRunnableTasks <= 0 {
+		cfg.MaxRunnableTasks = cfg.WorkerQueueSize
+	}
 	if cfg.MaxSubmitRetries < 0 {
 		cfg.MaxSubmitRetries = 8
 	}
@@ -155,8 +177,11 @@ func normalizeConfig(cfg *Config) {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 3 * time.Second
 	}
-	if cfg.TaskTimeout < 0 {
-		cfg.TaskTimeout = 0
+	if cfg.RequestTimeout <= 0 {
+		cfg.RequestTimeout = defaultRequestTimeout
+	}
+	if cfg.TaskTimeout <= 0 {
+		cfg.TaskTimeout = defaultTaskTimeout
 	}
 	if cfg.HTTPTimeout <= 0 {
 		cfg.HTTPTimeout = 30 * time.Second

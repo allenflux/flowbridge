@@ -30,10 +30,28 @@ func (e *BackendHTTPError) Error() string {
 }
 
 func NewBackendClient(cfg Config) *BackendClient {
+	normalizeConfig(&cfg)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	connectionsPerHost := cfg.WorkerConcurrency + 2
+	if connectionsPerHost < 4 {
+		connectionsPerHost = 4
+	}
+	transport.MaxIdleConns = connectionsPerHost * 2
+	transport.MaxIdleConnsPerHost = connectionsPerHost
+	transport.MaxConnsPerHost = connectionsPerHost
+	transport.ResponseHeaderTimeout = cfg.HTTPTimeout
+
 	return &BackendClient{
 		baseURL: cfg.BackendBaseURL,
-		client:  &http.Client{Timeout: cfg.HTTPTimeout},
+		client: &http.Client{
+			Timeout:   cfg.HTTPTimeout,
+			Transport: transport,
+		},
 	}
+}
+
+func (c *BackendClient) CloseIdleConnections() {
+	c.client.CloseIdleConnections()
 }
 
 func (c *BackendClient) PostForm(ctx context.Context, path string, form map[string]string, apiKey string) (json.RawMessage, map[string]any, error) {
@@ -139,28 +157,44 @@ func backendTaskID(resp map[string]any) string {
 }
 
 func backendStatus(resp map[string]any) int {
+	status, _ := parseBackendStatus(resp)
+	return status
+}
+
+func parseBackendStatus(resp map[string]any) (int, bool) {
 	value, ok := resp["status"]
 	if !ok {
-		return StatusRunning
+		return 0, false
 	}
+	var status int
 	switch typed := value.(type) {
 	case float64:
-		return int(typed)
+		status = int(typed)
+		if float64(status) != typed {
+			return 0, false
+		}
 	case int:
-		return typed
+		status = typed
 	case string:
 		switch strings.TrimSpace(typed) {
 		case "-1":
-			return StatusFailed
+			status = StatusFailed
 		case "0":
-			return StatusPending
+			status = StatusPending
 		case "1":
-			return StatusRunning
+			status = StatusRunning
 		case "2":
-			return StatusSuccess
+			status = StatusSuccess
 		case "3":
-			return 3
+			status = 3
+		default:
+			return 0, false
 		}
+	default:
+		return 0, false
 	}
-	return StatusRunning
+	if status != StatusFailed && status != StatusPending && status != StatusRunning && status != StatusSuccess && status != 3 {
+		return 0, false
+	}
+	return status, true
 }

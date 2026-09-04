@@ -19,6 +19,7 @@ RUN apt-get update \
 
 COPY --from=builder /out/flowbridge /app/flowbridge
 COPY config.json /app/config.json
+COPY static/BOOTSTRAP-ICONS-LICENSE /app/licenses/BOOTSTRAP-ICONS-LICENSE
 
 USER flowbridge
 EXPOSE 8080

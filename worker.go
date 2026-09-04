@@ -17,6 +17,40 @@ import (
 
 var errBackendSubmissionUncertain = errors.New("backend submission acceptance is uncertain")
 
+type recoverablePersistenceError struct {
+	operation string
+	err       error
+}
+
+type workflowStepFailure struct {
+	index  int
+	result json.RawMessage
+	err    error
+}
+
+func (e *workflowStepFailure) Error() string {
+	return e.err.Error()
+}
+
+func (e *workflowStepFailure) Unwrap() error {
+	return e.err
+}
+
+func (e *recoverablePersistenceError) Error() string {
+	return e.operation + ": " + e.err.Error()
+}
+
+func (e *recoverablePersistenceError) Unwrap() error {
+	return e.err
+}
+
+func persistenceError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &recoverablePersistenceError{operation: operation, err: err}
+}
+
 type submissionVisibility uint8
 
 const (
@@ -32,10 +66,12 @@ type Worker struct {
 	queue                    chan int64
 	seenMu                   sync.Mutex
 	seen                     map[int64]struct{}
+	wg                       sync.WaitGroup
 	submissionRecoveryWindow time.Duration
 }
 
 func NewWorker(store *Store, backend *BackendClient, cfg Config) *Worker {
+	normalizeConfig(&cfg)
 	queueSize := cfg.WorkerQueueSize
 	if queueSize < cfg.WorkerConcurrency {
 		queueSize = cfg.WorkerConcurrency
@@ -55,10 +91,35 @@ func NewWorker(store *Store, backend *BackendClient, cfg Config) *Worker {
 }
 
 func (w *Worker) Start(ctx context.Context) {
+	w.wg.Add(w.cfg.WorkerConcurrency + 1)
 	for i := 0; i < w.cfg.WorkerConcurrency; i++ {
-		go w.loop(ctx)
+		go func() {
+			defer w.wg.Done()
+			w.loop(ctx)
+		}()
 	}
-	go w.recoverLoop(ctx)
+	go func() {
+		defer w.wg.Done()
+		w.recoverLoop(ctx)
+	}()
+}
+
+func (w *Worker) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		w.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (w *Worker) QueueStats() (depth int, capacity int) {
+	return len(w.queue), cap(w.queue)
 }
 
 func (w *Worker) Enqueue(id int64) bool {
@@ -90,6 +151,11 @@ func (w *Worker) loop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return
 		case id := <-w.queue:
 			if err := w.safeRunTask(ctx, id); err != nil {
 				log.Printf("workflow task %d failed: %v", id, err)
@@ -104,7 +170,7 @@ func (w *Worker) safeRunTask(ctx context.Context, id int64) (err error) {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("workflow task panic: %v", recovered)
 			log.Printf("panic in workflow task %d: %v\n%s", id, recovered, debug.Stack())
-			_ = w.store.MarkTaskFailed(context.Background(), id, truncateMessage(err.Error(), 2000))
+			w.markTaskFailed(id, err.Error())
 		}
 	}()
 	return w.runTask(ctx, id)
@@ -114,6 +180,9 @@ func (w *Worker) recoverLoop(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		ids, err := w.store.ListRunnableTaskIDs(ctx, w.cfg.WorkerConcurrency*4)
 		if err == nil {
 			for _, id := range ids {
@@ -141,18 +210,25 @@ func (w *Worker) runTask(parent context.Context, id int64) error {
 	if task.Status == StatusSuccess || task.Status == StatusFailed {
 		return nil
 	}
-	ctx, cancel := w.taskContext(parent)
+	ctx, cancel := w.taskContext(parent, task.DeadlineAnchor, task.CreatedAt)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		timeoutErr := fmt.Errorf("workflow task %s exceeded its %s deadline: %w", task.TaskID, w.cfg.TaskTimeout, err)
+		if parent.Err() == nil {
+			w.markTaskFailed(id, timeoutErr.Error())
+		}
+		return timeoutErr
+	}
 
 	var req AnimeVideoRequest
 	if err := json.Unmarshal(task.RequestPayload, &req); err != nil {
-		_ = w.store.MarkTaskFailed(parent, id, "invalid stored request payload: "+err.Error())
+		w.markTaskFailed(id, "invalid stored request payload: "+err.Error())
 		return err
 	}
 	req.APIKey = taskAPIKey(task.RequestPayload, req.APIKey)
 	spec, videoScene, err := resolveBackendWorkflow(req)
 	if err != nil {
-		_ = w.store.MarkTaskFailed(parent, id, err.Error())
+		w.markTaskFailed(id, err.Error())
 		return err
 	}
 	if err := w.store.MarkTaskRunning(ctx, id, StepAnimeImage); err != nil {
@@ -161,9 +237,7 @@ func (w *Worker) runTask(parent context.Context, id int64) error {
 
 	imageURL, err := w.ensureAnimeImage(ctx, task, req, spec)
 	if err != nil {
-		if !errors.Is(err, errBackendSubmissionUncertain) {
-			_ = w.store.MarkTaskFailed(parent, id, err.Error())
-		}
+		w.handleTaskError(parent, ctx, id, err)
 		return err
 	}
 	if err := w.store.MarkTaskRunning(ctx, id, StepAnimeVideo); err != nil {
@@ -171,17 +245,18 @@ func (w *Worker) runTask(parent context.Context, id int64) error {
 	}
 	final, err := w.ensureAnimeVideo(ctx, task, req, spec, videoScene, imageURL)
 	if err != nil {
-		if !errors.Is(err, errBackendSubmissionUncertain) {
-			_ = w.store.MarkTaskFailed(parent, id, err.Error())
-		}
+		w.handleTaskError(parent, ctx, id, err)
 		return err
 	}
-	return w.store.MarkTaskSuccess(ctx, id, final)
+	return w.markTaskSuccess(id, final)
 }
 
 func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req AnimeVideoRequest, spec backendWorkflowSpec) (string, error) {
 	step, err := w.store.GetStep(ctx, task.ID, 1)
 	if err != nil {
+		if !isNotFound(err) {
+			err = persistenceError("load image workflow step", err)
+		}
 		return "", err
 	}
 	var result map[string]any
@@ -195,7 +270,7 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 	form := buildBackendImageForm(req, spec)
 	rawReq, _ := json.Marshal(form)
 	if err := w.store.UpdateStepStart(ctx, task.ID, 1, rawReq); err != nil {
-		return "", err
+		return "", persistenceError("persist image workflow step start", err)
 	}
 
 	backendID := step.BackendTaskID
@@ -203,7 +278,7 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 		rawResp, resp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, req.APIKey)
 		if visibility == submissionFound {
 			backendID = backendTaskID(resp)
-			if err := w.store.UpdateStepAccepted(ctx, task.ID, 1, backendID, rawResp); err != nil {
+			if err := w.updateStepAccepted(task.ID, 1, backendID, rawResp); err != nil {
 				return "", err
 			}
 		} else if visibility == submissionIndeterminate {
@@ -216,33 +291,30 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 		rawResp, resp, err := w.postBackendForm(ctx, task.ID, 1, spec.ImagePath, form, req.APIKey)
 		if err != nil {
 			if !errors.Is(err, errBackendSubmissionUncertain) {
-				_ = w.store.MarkStepFailed(ctx, task.ID, 1, err.Error(), rawResp)
+				err = w.failStep(1, err, rawResp)
 			}
 			return "", err
 		}
 		backendID = backendTaskID(resp)
 		if backendID == "" {
 			err := errors.New("backend image step did not return uuid/task_id")
-			_ = w.store.MarkStepFailed(ctx, task.ID, 1, err.Error(), rawResp)
-			return "", err
+			return "", w.failStep(1, err, rawResp)
 		}
-		if err := w.store.UpdateStepAccepted(ctx, task.ID, 1, backendID, rawResp); err != nil {
+		if err := w.updateStepAccepted(task.ID, 1, backendID, rawResp); err != nil {
 			return "", err
 		}
 	}
 
 	rawResult, result, err := w.waitBackendTask(ctx, task.ID, 1, backendID, req.APIKey)
 	if err != nil {
-		_ = w.store.MarkStepFailed(ctx, task.ID, 1, err.Error(), rawResult)
-		return "", err
+		return "", w.failStep(1, err, rawResult)
 	}
 	imageURL := extractURL(result)
 	if imageURL == "" {
 		err := fmt.Errorf("image step completed but no output URL was found in backend task %s", backendID)
-		_ = w.store.MarkStepFailed(ctx, task.ID, 1, err.Error(), rawResult)
-		return "", err
+		return "", w.failStep(1, err, rawResult)
 	}
-	if err := w.store.MarkStepSuccess(ctx, task.ID, 1, rawResult); err != nil {
+	if err := w.markStepSuccess(task.ID, 1, rawResult); err != nil {
 		return "", err
 	}
 	return imageURL, nil
@@ -329,16 +401,90 @@ func watermarkEnabled(value *bool) bool {
 	return *value
 }
 
-func (w *Worker) taskContext(parent context.Context) (context.Context, context.CancelFunc) {
-	if w.cfg.TaskTimeout <= 0 {
-		return context.WithCancel(parent)
+func (w *Worker) taskContext(parent context.Context, deadlineAnchor time.Time, createdAt time.Time) (context.Context, context.CancelFunc) {
+	if deadlineAnchor.IsZero() {
+		deadlineAnchor = createdAt
 	}
-	return context.WithTimeout(parent, w.cfg.TaskTimeout)
+	if deadlineAnchor.IsZero() {
+		return context.WithTimeout(parent, w.cfg.TaskTimeout)
+	}
+	return context.WithDeadline(parent, deadlineAnchor.Add(w.cfg.TaskTimeout))
+}
+
+func (w *Worker) handleTaskError(parent context.Context, taskCtx context.Context, id int64, err error) {
+	if parent.Err() != nil {
+		return
+	}
+	var persistenceErr *recoverablePersistenceError
+	if errors.As(err, &persistenceErr) && taskCtx.Err() == nil {
+		return
+	}
+	if errors.Is(err, errBackendSubmissionUncertain) && taskCtx.Err() == nil {
+		return
+	}
+	if errors.Is(taskCtx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("workflow exceeded its %s deadline: %w", w.cfg.TaskTimeout, err)
+	}
+	var stepFailure *workflowStepFailure
+	if errors.As(err, &stepFailure) {
+		w.markTaskAndStepFailed(id, stepFailure.index, err.Error(), stepFailure.result)
+		return
+	}
+	w.markTaskFailed(id, err.Error())
+}
+
+func (w *Worker) persistenceContext() (context.Context, context.CancelFunc) {
+	timeout := w.cfg.HTTPTimeout
+	if timeout <= 0 || timeout > 5*time.Second {
+		timeout = 5 * time.Second
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+func (w *Worker) markTaskFailed(id int64, message string) {
+	ctx, cancel := w.persistenceContext()
+	defer cancel()
+	if err := w.store.MarkTaskFailed(ctx, id, message); err != nil {
+		log.Printf("mark workflow task %d failed: %v", id, err)
+	}
+}
+
+func (w *Worker) markTaskAndStepFailed(id int64, index int, message string, result json.RawMessage) {
+	ctx, cancel := w.persistenceContext()
+	defer cancel()
+	if err := w.store.MarkTaskAndStepFailed(ctx, id, index, message, result); err != nil {
+		log.Printf("mark workflow task %d and step %d failed: %v", id, index, err)
+	}
+}
+
+func (w *Worker) markTaskSuccess(id int64, result json.RawMessage) error {
+	ctx, cancel := w.persistenceContext()
+	defer cancel()
+	return w.store.MarkTaskSuccess(ctx, id, result)
+}
+
+func (w *Worker) updateStepAccepted(taskID int64, index int, backendTaskID string, response json.RawMessage) error {
+	ctx, cancel := w.persistenceContext()
+	defer cancel()
+	return persistenceError("persist accepted backend workflow step", w.store.UpdateStepAccepted(ctx, taskID, index, backendTaskID, response))
+}
+
+func (w *Worker) markStepSuccess(taskID int64, index int, result json.RawMessage) error {
+	ctx, cancel := w.persistenceContext()
+	defer cancel()
+	return persistenceError("persist successful backend workflow step", w.store.MarkStepSuccess(ctx, taskID, index, result))
+}
+
+func (w *Worker) failStep(index int, cause error, result json.RawMessage) error {
+	return &workflowStepFailure{index: index, result: result, err: cause}
 }
 
 func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req AnimeVideoRequest, spec backendWorkflowSpec, videoScene string, imageURL string) (json.RawMessage, error) {
 	step, err := w.store.GetStep(ctx, task.ID, 2)
 	if err != nil {
+		if !isNotFound(err) {
+			err = persistenceError("load video workflow step", err)
+		}
 		return nil, err
 	}
 	if step.Status == StatusSuccess && len(step.ResultPayload) > 0 {
@@ -347,7 +493,7 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 	form := buildBackendVideoForm(req, spec, videoScene, imageURL)
 	rawReq, _ := json.Marshal(form)
 	if err := w.store.UpdateStepStart(ctx, task.ID, 2, rawReq); err != nil {
-		return nil, err
+		return nil, persistenceError("persist video workflow step start", err)
 	}
 
 	backendID := step.BackendTaskID
@@ -355,7 +501,7 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 		rawResp, resp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, req.APIKey)
 		if visibility == submissionFound {
 			backendID = backendTaskID(resp)
-			if err := w.store.UpdateStepAccepted(ctx, task.ID, 2, backendID, rawResp); err != nil {
+			if err := w.updateStepAccepted(task.ID, 2, backendID, rawResp); err != nil {
 				return nil, err
 			}
 		} else if visibility == submissionIndeterminate {
@@ -368,27 +514,25 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 		rawResp, resp, err := w.postBackendForm(ctx, task.ID, 2, spec.VideoPath, form, req.APIKey)
 		if err != nil {
 			if !errors.Is(err, errBackendSubmissionUncertain) {
-				_ = w.store.MarkStepFailed(ctx, task.ID, 2, err.Error(), rawResp)
+				err = w.failStep(2, err, rawResp)
 			}
 			return nil, err
 		}
 		backendID = backendTaskID(resp)
 		if backendID == "" {
 			err := errors.New("backend video step did not return uuid/task_id")
-			_ = w.store.MarkStepFailed(ctx, task.ID, 2, err.Error(), rawResp)
-			return nil, err
+			return nil, w.failStep(2, err, rawResp)
 		}
-		if err := w.store.UpdateStepAccepted(ctx, task.ID, 2, backendID, rawResp); err != nil {
+		if err := w.updateStepAccepted(task.ID, 2, backendID, rawResp); err != nil {
 			return nil, err
 		}
 	}
 
 	rawResult, _, err := w.waitBackendTask(ctx, task.ID, 2, backendID, req.APIKey)
 	if err != nil {
-		_ = w.store.MarkStepFailed(ctx, task.ID, 2, err.Error(), rawResult)
-		return nil, err
+		return nil, w.failStep(2, err, rawResult)
 	}
-	if err := w.store.MarkStepSuccess(ctx, task.ID, 2, rawResult); err != nil {
+	if err := w.markStepSuccess(task.ID, 2, rawResult); err != nil {
 		return nil, err
 	}
 	return rawResult, nil
@@ -536,7 +680,7 @@ func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, step
 		raw, result, err := w.backend.GetTask(ctx, backendTaskID, apiKey)
 		if err != nil {
 			lastRaw = raw
-			if strings.Contains(err.Error(), "HTTP 404") {
+			if isBackendHTTPStatus(err, http.StatusNotFound) {
 				taskNotFoundErrors++
 				_ = w.store.UpdateStepPollError(ctx, workflowTaskID, stepIndex, fmt.Sprintf("backend task not visible yet (%d/%d): %s", taskNotFoundErrors, w.cfg.MaxTaskNotFound, err.Error()), raw)
 				if taskNotFoundErrors >= w.cfg.MaxTaskNotFound {
@@ -561,10 +705,25 @@ func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, step
 				continue
 			}
 		}
-		consecutiveErrors = 0
 		taskNotFoundErrors = 0
 		lastRaw = raw
-		switch status := backendStatus(result); status {
+		status, valid := parseBackendStatus(result)
+		if !valid {
+			consecutiveErrors++
+			message := fmt.Sprintf("backend task %s returned a missing or unknown status (%d/%d)", backendTaskID, consecutiveErrors, w.cfg.MaxPollErrors)
+			_ = w.store.UpdateStepPollError(ctx, workflowTaskID, stepIndex, message, raw)
+			if consecutiveErrors >= w.cfg.MaxPollErrors {
+				return lastRaw, result, errors.New(message)
+			}
+			select {
+			case <-ctx.Done():
+				return w.finalBackendCheck(backendTaskID, apiKey, lastRaw, result, ctx.Err())
+			case <-time.After(w.cfg.PollInterval):
+				continue
+			}
+		}
+		consecutiveErrors = 0
+		switch status {
 		case StatusSuccess:
 			return raw, result, nil
 		case StatusFailed:
@@ -580,11 +739,22 @@ func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, step
 }
 
 func (w *Worker) finalBackendCheck(backendTaskID string, apiKey string, lastRaw json.RawMessage, lastResult map[string]any, cause error) (json.RawMessage, map[string]any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), w.cfg.HTTPTimeout)
+	if errors.Is(cause, context.Canceled) {
+		return lastRaw, lastResult, fmt.Errorf("stopped waiting for backend task %s: %w", backendTaskID, cause)
+	}
+	timeout := w.cfg.HTTPTimeout
+	if timeout <= 0 || timeout > 5*time.Second {
+		timeout = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	raw, result, err := w.backend.GetTask(ctx, backendTaskID, apiKey)
 	if err == nil {
-		switch backendStatus(result) {
+		status, valid := parseBackendStatus(result)
+		if !valid {
+			return raw, result, fmt.Errorf("backend task %s returned a missing or unknown status at deadline: %w", backendTaskID, cause)
+		}
+		switch status {
 		case StatusSuccess:
 			return raw, result, nil
 		case StatusFailed:

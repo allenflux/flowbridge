@@ -10,6 +10,8 @@ COUNT="${COUNT:-5}"
 CONCURRENCY="${CONCURRENCY:-2}"
 POLL_SECONDS="${POLL_SECONDS:-10}"
 MAX_POLLS="${MAX_POLLS:-60}"
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-30}"
 
 if [[ -z "$APIKEY" ]]; then
   echo "FLOWBRIDGE_APIKEY is required"
@@ -27,7 +29,7 @@ echo "BASE_URL=$BASE_URL COUNT=$COUNT CONCURRENCY=$CONCURRENCY SCENE_NAME=$SCENE
 curl_get() {
   local output="$1"
   local url="$2"
-  curl -sS -o "$output" -w "%{http_code}" \
+  curl -sS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" -o "$output" -w "%{http_code}" \
     --header "Accept: application/json" \
     --header "Apikey: $APIKEY" \
     "$url"
@@ -37,7 +39,7 @@ submit_one() {
   local index="$1"
   local response="$tmp_dir/submit-$index.json"
   local code
-  code="$(curl -sS -o "$response" -w "%{http_code}" \
+  code="$(curl -sS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" -o "$response" -w "%{http_code}" \
     --location "$BASE_URL/api/public/generate/undress/anime/video" \
     --header "Accept: application/json" \
     --header "Content-Type: application/x-www-form-urlencoded" \
@@ -72,24 +74,28 @@ PY
   echo "submitted $index task_id=$task_id"
 }
 
-active=0
 submit_failures=0
+pids=()
 for i in $(seq 1 "$COUNT"); do
   (
     submit_one "$i"
   ) &
-  active=$((active + 1))
-  if (( active >= CONCURRENCY )); then
-    if ! wait; then
-      submit_failures=$((submit_failures + 1))
-    fi
-    active=0
+  pids+=("$!")
+  if (( ${#pids[@]} >= CONCURRENCY )); then
+    for pid in "${pids[@]}"; do
+      if ! wait "$pid"; then
+        submit_failures=$((submit_failures + 1))
+      fi
+    done
+    pids=()
   fi
 done
-if (( active > 0 )); then
-  if ! wait; then
-    submit_failures=$((submit_failures + 1))
-  fi
+if (( ${#pids[@]} > 0 )); then
+  for pid in "${pids[@]}"; do
+    if ! wait "$pid"; then
+      submit_failures=$((submit_failures + 1))
+    fi
+  done
 fi
 
 if (( submit_failures > 0 )); then

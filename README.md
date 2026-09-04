@@ -13,11 +13,13 @@ Edit `config.json` first:
   "db_path": "flowbridge.db",
   "worker_concurrency": 8,
   "worker_queue_size": 10000,
+  "max_runnable_tasks": 10000,
   "max_submit_retries": 8,
   "max_poll_errors": 10,
   "max_task_not_found": 60,
   "poll_interval": "3s",
-  "task_timeout": "0",
+  "request_timeout": "15s",
+  "task_timeout": "30m",
   "http_timeout": "30s"
 }
 ```
@@ -70,10 +72,13 @@ bash scripts/workflow_smoke.sh
 ```
 
 Keep `COUNT` and `CONCURRENCY` small for production smoke tests. The workflow test submits real backend jobs.
+Both scripts also accept `CURL_CONNECT_TIMEOUT` and `CURL_MAX_TIME`; every probe is bounded so a broken connection cannot hang the smoke run.
 
-`task_timeout` set to `"0"` means FlowBridge will not fail a workflow only because it has been running for a long time. It will keep polling until the backend returns success/failure, the service stops, or query error limits are reached.
+`task_timeout` is a hard end-to-end deadline measured from task creation and is preserved across retries and service restarts. Non-positive values fall back to `30m`, so a stalled upstream task cannot occupy a worker forever. Increase it explicitly if valid workflows can take longer. On the first upgrade from a database without deadline metadata, existing runnable tasks are given one fresh timeout window rather than failed retroactively.
 
-An unlimited task occupies one worker while it is polling. If upstream jobs can stall indefinitely, use a finite `task_timeout` or size `worker_concurrency` with that failure mode in mind.
+`request_timeout` applies a deadline to API and admin request contexts, including time waiting for SQLite, so cooperative request work does not remain stuck indefinitely.
+
+`max_runnable_tasks` caps the combined pending/running backlog (default `10000`). New submissions receive HTTP 503 plus `Retry-After` when that limit is reached, protecting SQLite from unbounded overload. Override it with `FLOWBRIDGE_MAX_RUNNABLE_TASKS` after sizing the deployment.
 
 `max_submit_retries` controls retries for temporary backend submit failures such as HTTP 429 and 5xx responses. Ambiguous outcomes (5xx, network interruption, or an unreadable success response) are checked by the stable backend step `task_id` before any retry; explicit non-retryable 4xx responses still fail fast.
 
@@ -192,7 +197,7 @@ POST /api/public/task
 POST /api/public/task/details
 ```
 
-Batch query uses the same root JSON-array contract as the backend public API, with at most 1,000 task IDs per request. Results follow the first occurrence of each requested task ID; unknown IDs are omitted unless none of the requested tasks exist.
+Batch query uses the same root JSON-array contract as the backend public API, with at most 1,000 task IDs per request. Results follow the first occurrence of each requested task ID; unknown IDs are omitted unless none of the requested tasks exist. Combined stored result payloads are capped at 32 MiB per response to prevent memory amplification; oversized batches return HTTP 413 and should be split.
 
 ```bash
 curl --location 'http://127.0.0.1:8080/api/public/task/details' \
@@ -209,11 +214,24 @@ Admin console:
 /admin/workflows/{task_id}
 ```
 
+The tab favicon is the unmodified Bootstrap Icons `arrow-left-right` SVG, embedded locally so the icon does not depend on a CDN at request time. Its MIT notice is in `static/BOOTSTRAP-ICONS-LICENSE`.
+
+Liveness and readiness probes:
+
+```text
+GET /healthz
+GET /readyz
+```
+
+`/readyz` verifies SQLite access and reports whether submissions are being accepted, the configured runnable-task ceiling, runnable task count, worker count, and in-memory queue depth/capacity. Docker Compose uses this endpoint for its bounded health check.
+
 ## Reliability Notes
 
 - Submitted tasks are persisted to SQLite before worker execution.
 - Each backend step gets a stable derived `task_id`; a recovered running step checks for an already accepted backend task before submitting again.
-- Worker queue overflow does not block requests; pending tasks are recovered from DB.
+- Worker queue overflow does not block requests; pending tasks are recovered from DB, while the durable runnable backlog is capped by `max_runnable_tasks`.
 - Worker and HTTP handlers recover from panics and return/record failures.
-- Backend `status=2` means success, `status=-1` means failed, and `status=3` keeps polling.
+- Backend `status=2` means success, `status=-1` means failed, and `status=3` keeps polling. Missing or unknown statuses fail after `max_poll_errors` instead of polling forever.
+- Worker retries share the persisted task-creation deadline. Existing runnable tasks are grandfathered once when the deadline column is introduced.
+- Shutdown cancels workers while HTTP requests drain, waits within one bounded budget, and Docker Compose grants a 35-second stop window before forcing termination.
 - Tune `FLOWBRIDGE_WORKERS` carefully because each worker can hold one backend workflow while polling.

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,19 +13,29 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Printf("flowbridge stopped: %v", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg := LoadConfig()
 	store, err := OpenStore(cfg.DBPath)
 	if err != nil {
-		log.Fatalf("open store: %v", err)
+		return fmt.Errorf("open store: %w", err)
 	}
 	defer store.Close()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	backend := NewBackendClient(cfg)
+	defer backend.CloseIdleConnections()
 	worker := NewWorker(store, backend, cfg)
-	worker.Start(ctx)
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	worker.Start(workerCtx)
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
@@ -32,19 +44,46 @@ func main() {
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
+	serverErr := make(chan error, 1)
 	go func() {
 		log.Printf("flowbridge listening on %s, backend=%s, db=%s", cfg.Addr, cfg.BackendBaseURL, cfg.DBPath)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v", err)
+		err := server.ListenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
 		}
+		serverErr <- err
 	}()
 
-	<-ctx.Done()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	var listenErr error
+	select {
+	case <-signalCtx.Done():
+	case err := <-serverErr:
+		listenErr = err
+	}
+
+	shutdownTimeout := cfg.RequestTimeout + 5*time.Second
+	if shutdownTimeout < 10*time.Second {
+		shutdownTimeout = 10 * time.Second
+	}
+	if shutdownTimeout > 30*time.Second {
+		shutdownTimeout = 30 * time.Second
+	}
+	// Stop background work immediately while in-flight HTTP handlers drain. Both
+	// phases share one budget so container shutdown cannot stretch indefinitely.
+	cancelWorker()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
+		if closeErr := server.Close(); closeErr != nil {
+			log.Printf("force close server: %v", closeErr)
+		}
 	}
+	if err := worker.Wait(shutdownCtx); err != nil {
+		log.Printf("wait for workers: %v", err)
+	}
+	cancel()
+	return listenErr
 }

@@ -4,10 +4,12 @@
   "db_path": "/app/data/flowbridge.db",
   "worker_concurrency": 8,
   "worker_queue_size": 10000,
+  "max_runnable_tasks": 10000,
   "max_submit_retries": 8,
   "max_poll_errors": 10,
   "max_task_not_found": 60,
   "poll_interval": "3s",
-  "task_timeout": "0",
+  "request_timeout": "15s",
+  "task_timeout": "30m",
   "http_timeout": "30s"
 }

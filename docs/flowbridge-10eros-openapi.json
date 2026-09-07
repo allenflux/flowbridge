@@ -1,0 +1,529 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "FlowBridge 10Eros 先生图再生视频",
+    "version": "1.0.0",
+    "description": "四个 10Eros 一一对应组合工作流的独立入口。不要使用旧的 /api/public/generate/undress/anime/video。中间生图固定关闭加密和水印，最终 LTX 8s 视频才应用调用方参数。"
+  },
+  "host": "flowbridge.inaiai.com",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "tags": [
+    {
+      "name": "FlowBridge 10Eros",
+      "description": "先生图，再生成 LTX 8s 视频"
+    },
+    {
+      "name": "FlowBridge 任务查询",
+      "description": "查询 FlowBridge 异步组合任务"
+    }
+  ],
+  "paths": {
+    "/api/public/generate/10eros/image-to-video": {
+      "post": {
+        "tags": [
+          "FlowBridge 10Eros"
+        ],
+        "summary": "10Eros 先生图再生视频（4 场景独立入口）",
+        "description": "Doggy、Lesbian：Qwen 双图生图，再生成 LTX 8s 视频；Cumshot、Anal：Undress Anime 单图生图，再生成 LTX 8s 视频。中间图固定 is_encrypt=false、is_watermark=false；最终视频才使用请求中的加密和水印设置。",
+        "consumes": [
+          "application/x-www-form-urlencoded"
+        ],
+        "parameters": [
+          {
+            "name": "Apikey",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "description": "用户后端 API Key"
+          },
+          {
+            "name": "source_path",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "description": "第一张输入图片 URL"
+          },
+          {
+            "name": "target_path",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "description": "第二张输入图片 URL；gay_doggy_10eros、lesbian_kiss_10eros 必填"
+          },
+          {
+            "name": "scene_name",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "enum": [
+              "gay_doggy_10eros",
+              "gay_cumshot_10eros",
+              "gay_anal_creampie_10eros",
+              "lesbian_kiss_10eros"
+            ],
+            "description": "四个场景之一；图片和视频场景一一对应"
+          },
+          {
+            "name": "video_scene_name",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "description": "建议省略；若传入必须与 scene_name 相同"
+          },
+          {
+            "name": "incoming_prompt",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "生图和视频的共用兜底提示词"
+          },
+          {
+            "name": "qwen_incoming_prompt",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "第一步生图提示词；为空时使用 incoming_prompt"
+          },
+          {
+            "name": "wan_incoming_prompt",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "第二步 LTX 视频提示词；为空时使用 incoming_prompt"
+          },
+          {
+            "name": "audio_enabled",
+            "in": "formData",
+            "required": false,
+            "type": "boolean",
+            "default": true,
+            "description": "LTX 音频开关"
+          },
+          {
+            "name": "video_format",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "video/h264-mp4",
+            "enum": [
+              "video/h264-mp4",
+              "video/h265-mp4"
+            ],
+            "description": "最终视频格式"
+          },
+          {
+            "name": "is_watermark",
+            "in": "formData",
+            "required": false,
+            "type": "boolean",
+            "default": true,
+            "description": "只控制最终视频水印；中间图固定为 false。兼容别名 watermark"
+          },
+          {
+            "name": "is_encrypt",
+            "in": "formData",
+            "required": false,
+            "type": "boolean",
+            "default": false,
+            "description": "只控制最终视频加密；中间图固定为 false"
+          },
+          {
+            "name": "bid",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "业务编号"
+          },
+          {
+            "name": "app_id",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "应用编号"
+          },
+          {
+            "name": "fee",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "10",
+            "description": "费用参数"
+          },
+          {
+            "name": "title",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "任务标题"
+          },
+          {
+            "name": "hash_key",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "向支持该字段的后端步骤透传；Qwen 双图步骤从 Apikey 自动计算"
+          },
+          {
+            "name": "notify_url",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "只发送给最终 LTX 步骤"
+          },
+          {
+            "name": "task_id",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "调用方任务 ID；省略时由 FlowBridge 自动生成"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务已受理",
+            "schema": {
+              "$ref": "#/definitions/WorkflowTask"
+            }
+          },
+          "400": {
+            "description": "参数或场景错误",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "409": {
+            "description": "task_id 冲突",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/api/public/task": {
+      "get": {
+        "tags": [
+          "FlowBridge 任务查询"
+        ],
+        "summary": "按 task_id 查询组合任务",
+        "description": "任务未完成时返回 FlowBridge 状态；成功后返回最终后端任务结果。Apikey 当前为兼容性可选 Header。",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "query",
+            "required": true,
+            "type": "string",
+            "description": "提交接口返回或调用方指定的 task_id"
+          },
+          {
+            "name": "Apikey",
+            "in": "header",
+            "required": false,
+            "type": "string",
+            "description": "兼容现有调用方式；FlowBridge 本地任务查询当前不依赖该值"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务状态或最终结果",
+            "schema": {
+              "$ref": "#/definitions/TaskQueryResponse"
+            }
+          },
+          "400": {
+            "description": "缺少 task_id",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "任务不存在",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "FlowBridge 任务查询"
+        ],
+        "summary": "通过表单查询组合任务",
+        "description": "与 GET 查询语义一致，使用表单传 task_id。",
+        "consumes": [
+          "application/x-www-form-urlencoded"
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "description": "提交接口返回或调用方指定的 task_id"
+          },
+          {
+            "name": "Apikey",
+            "in": "header",
+            "required": false,
+            "type": "string",
+            "description": "兼容现有调用方式；FlowBridge 本地任务查询当前不依赖该值"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务状态或最终结果",
+            "schema": {
+              "$ref": "#/definitions/TaskQueryResponse"
+            }
+          },
+          "400": {
+            "description": "缺少 task_id",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "任务不存在",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/api/public/task/details": {
+      "post": {
+        "tags": [
+          "FlowBridge 任务查询"
+        ],
+        "summary": "批量查询组合任务",
+        "description": "请求体直接传 task_id 字符串数组。空 ID 和重复 ID 会被去除，每次最多传 1000 个任务 ID；结果按照每个 ID 首次出现的请求顺序返回，部分不存在的任务会被忽略。Apikey 当前为兼容性可选 Header。",
+        "consumes": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "body",
+            "required": true,
+            "description": "task_id 字符串数组；不要包成对象",
+          "schema": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+                "type": "string"
+              },
+              "example": [
+                "smoke_gay_doggy_10eros_001",
+                "smoke_gay_anal_creampie_10eros_001"
+              ]
+            }
+          },
+          {
+            "name": "Apikey",
+            "in": "header",
+            "required": false,
+            "type": "string",
+            "description": "兼容现有调用方式；FlowBridge 本地任务查询当前不依赖该值"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已找到任务的状态或最终结果数组",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/TaskQueryResponse"
+              }
+            }
+          },
+          "400": {
+          "description": "请求体不是 task_id 字符串数组、数组中没有有效 ID，或超过 1000 个 ID",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "所有任务都不存在",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "WorkflowTask": {
+      "type": "object",
+      "properties": {
+        "uuid": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "bid": {
+          "type": "string"
+        },
+        "fee": {
+          "type": "string"
+        },
+        "app_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "notify_url": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer",
+          "format": "int32",
+          "description": "0 待处理，1 处理中，2 成功，-1 失败"
+        },
+        "task_type": {
+          "type": "string",
+          "example": "10eros_image_to_video"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "target_path": {
+          "type": "string"
+        },
+        "scene_name": {
+          "type": "string"
+        },
+        "output_format": {
+          "type": "string",
+          "description": "兼容旧请求时可能返回；10Eros LTX 流程不使用该参数"
+        },
+        "video_format": {
+          "type": "string"
+        },
+        "audio_enabled": {
+          "type": "boolean"
+        },
+        "is_watermark": {
+          "type": "boolean"
+        },
+        "is_encrypt": {
+          "type": "boolean"
+        },
+        "current_step": {
+          "type": "string"
+        },
+        "out_data": {
+          "description": "成功输出，结构由最终后端任务决定"
+        },
+        "error": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkflowStep"
+          }
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "WorkflowStep": {
+      "type": "object",
+      "properties": {
+        "step_index": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "step_name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "backend_task_id": {
+          "type": "string"
+        },
+        "error_message": {
+          "type": "string"
+        }
+      }
+    },
+    "TaskQueryResponse": {
+      "type": "object",
+      "description": "未完成时包含下列 FlowBridge 字段；成功后可能直接返回最终后端任务的完整 JSON。",
+      "additionalProperties": true,
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer",
+          "format": "int32",
+          "description": "0 待处理，1 处理中，2 成功，-1 失败"
+        },
+        "task_type": {
+          "type": "string"
+        },
+        "current_step": {
+          "type": "string"
+        },
+        "out_data": {
+          "description": "成功任务的最终输出"
+        },
+        "error": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -335,7 +335,7 @@ func buildBackendImageForm(req AnimeVideoRequest, spec backendWorkflowSpec) map[
 		form,
 		req,
 		spec.ImagePath != backendQwenTwoImagePath,
-		spec.VideoPath != backendLTX8sVideoPath,
+		spec.VideoPath != backendLTX8sVideoPath && spec.VideoPath != backendMinimaxH3MultiPath,
 	)
 
 	if spec.ImagePath == backendQwenTwoImagePath {
@@ -345,6 +345,18 @@ func buildBackendImageForm(req AnimeVideoRequest, spec backendWorkflowSpec) map[
 }
 
 func buildBackendVideoForm(req AnimeVideoRequest, spec backendWorkflowSpec, videoScene string, imageURL string) map[string]string {
+	if spec.VideoPath == backendMinimaxH3MultiPath {
+		return compactForm(map[string]string{
+			"source_path": imageURL,
+			"scene_name":  videoScene,
+			"bid":         req.BID,
+			"app_id":      req.AppID,
+			"fee":         defaultString(req.Fee, "10"),
+			"notify_url":  req.NotifyURL,
+			"task_id":     backendStepTaskID(req.TaskID, "video"),
+		})
+	}
+
 	form := map[string]string{
 		"source_path":  imageURL,
 		"scene_name":   videoScene,

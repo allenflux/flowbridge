@@ -129,6 +129,35 @@ curl --location 'http://127.0.0.1:8080/api/public/generate/undress/anime/video' 
   --data-urlencode 'output_format=video'
 ```
 
+### Minimax H3 character-turnaround workflow
+
+This dedicated FlowBridge route accepts one scene only:
+
+```text
+POST /api/public/generate/videos/scenes/minimax-h3/multi
+scene_name=character_turnaround_sheet_h3
+```
+
+It waits for the intermediate image before submitting the video step:
+
+| Step | Backend endpoint | `scene_name` |
+| --- | --- | --- |
+| Image | `/api/public/generate/undress/anime` | `character_turnaround_sheet_h3` |
+| Video | `/api/public/generate/videos/scenes/minimax-h3/multi` | `character_turnaround_sheet_h3` |
+
+`Apikey` is required and is forwarded to both steps. `video_scene_name` may be omitted; if supplied, it must equal `scene_name`. The intermediate image is explicitly created without encryption or watermarking. The final video request receives the intermediate image URL and the request's `bid`, `app_id`, `fee`, and `notify_url` metadata.
+
+```bash
+curl --location 'http://127.0.0.1:8080/api/public/generate/videos/scenes/minimax-h3/multi' \
+  --header 'Accept: application/json' \
+  --header 'Content-Type: application/x-www-form-urlencoded' \
+  --header 'Apikey: your-user-api-key' \
+  --data-urlencode 'source_path=https://example.com/source.jpg' \
+  --data-urlencode 'scene_name=character_turnaround_sheet_h3' \
+  --data-urlencode 'incoming_prompt=' \
+  --data-urlencode 'fee=10'
+```
+
 ### Dedicated one-to-one 10Eros image-to-video API
 
 The four 10Eros pipelines use a separate FlowBridge endpoint:

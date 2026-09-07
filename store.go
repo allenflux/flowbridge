@@ -161,6 +161,8 @@ func (s *Store) CreateAnimeVideoTask(ctx context.Context, taskID string, req Ani
 	workflowType := WorkflowAnimeUndressVideo
 	if _, ok := tenErosBackendWorkflowSpecs[req.SceneName]; ok {
 		workflowType = WorkflowTenErosImageVideo
+	} else if _, ok := minimaxH3BackendWorkflowSpecs[req.SceneName]; ok {
+		workflowType = WorkflowMinimaxH3ImageVideo
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -242,6 +242,210 @@ func TestTenErosWorkflowsRouteAndForwardParameters(t *testing.T) {
 	}
 }
 
+func TestMinimaxH3WorkflowRoutesAndForwardsParameters(t *testing.T) {
+	recorder := &backendRecorder{}
+	cfg := defaultConfig()
+	cfg.BackendBaseURL = "http://backend.example"
+	cfg.DBPath = filepath.Join(t.TempDir(), "flowbridge.db")
+	cfg.PollInterval = time.Millisecond
+	cfg.TaskTimeout = 2 * time.Second
+	cfg.HTTPTimeout = time.Second
+	cfg.MaxSubmitRetries = 0
+
+	store, err := OpenStore(cfg.DBPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	req := AnimeVideoRequest{
+		SourcePath:         "https://input.example/source.jpg",
+		SceneName:          minimaxH3CharacterTurnaroundScene,
+		VideoSceneName:     minimaxH3CharacterTurnaroundScene,
+		IncomingPrompt:     "shared prompt",
+		QwenIncomingPrompt: "image prompt",
+		BID:                "bid-h3",
+		AppID:              "app-h3",
+		Fee:                "12",
+		Title:              "title-h3",
+		HashKey:            "hash-h3",
+		APIKey:             "api-key-h3",
+		NotifyURL:          "https://callback.example/h3",
+		TaskID:             "bridge-h3",
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	task, err := store.CreateAnimeVideoTask(context.Background(), req.TaskID, req, raw)
+	if err != nil {
+		t.Fatalf("CreateAnimeVideoTask: %v", err)
+	}
+	if task.WorkflowType != WorkflowMinimaxH3ImageVideo {
+		t.Fatalf("workflow type = %q, want %q", task.WorkflowType, WorkflowMinimaxH3ImageVideo)
+	}
+
+	backend := NewBackendClient(cfg)
+	backend.client.Transport = roundTripFunc(recorder.roundTrip)
+	worker := NewWorker(store, backend, cfg)
+	if err := worker.runTask(context.Background(), task.ID); err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+
+	requests := recorder.snapshot()
+	if len(requests) != 2 {
+		t.Fatalf("backend POST count = %d, want 2: %#v", len(requests), requests)
+	}
+	if requests[0].Path != backendUndressAnimeImagePath {
+		t.Fatalf("image path = %q, want %q", requests[0].Path, backendUndressAnimeImagePath)
+	}
+	if requests[1].Path != backendMinimaxH3MultiPath {
+		t.Fatalf("video path = %q, want %q", requests[1].Path, backendMinimaxH3MultiPath)
+	}
+	for index, request := range requests {
+		if request.APIKey != req.APIKey {
+			t.Errorf("request %d apikey = %q, want %q", index, request.APIKey, req.APIKey)
+		}
+		if request.Form.Get("scene_name") != minimaxH3CharacterTurnaroundScene {
+			t.Errorf("request %d scene_name = %q", index, request.Form.Get("scene_name"))
+		}
+	}
+
+	expectedImageForm := url.Values{
+		"source_path":     {req.SourcePath},
+		"scene_name":      {minimaxH3CharacterTurnaroundScene},
+		"incoming_prompt": {req.QwenIncomingPrompt},
+		"bid":             {req.BID},
+		"app_id":          {req.AppID},
+		"fee":             {req.Fee},
+		"title":           {req.Title},
+		"hash_key":        {req.HashKey},
+		"is_encrypt":      {"false"},
+		"is_watermark":    {"false"},
+		"task_id":         {"bridge-h3_image"},
+	}
+	assertValuesEqual(t, requests[0].Form, expectedImageForm)
+
+	expectedVideoForm := url.Values{
+		"source_path": {"https://cdn.example/intermediate.jpg"},
+		"scene_name":  {minimaxH3CharacterTurnaroundScene},
+		"bid":         {req.BID},
+		"app_id":      {req.AppID},
+		"fee":         {req.Fee},
+		"notify_url":  {req.NotifyURL},
+		"task_id":     {"bridge-h3_video"},
+	}
+	assertValuesEqual(t, requests[1].Form, expectedVideoForm)
+
+	detail, err := store.GetTaskDetail(context.Background(), req.TaskID)
+	if err != nil {
+		t.Fatalf("GetTaskDetail: %v", err)
+	}
+	if detail.Status != StatusSuccess {
+		t.Fatalf("workflow status = %d, want %d", detail.Status, StatusSuccess)
+	}
+}
+
+func TestMinimaxH3PublicRouteIsolatedAndValidated(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.DBPath = filepath.Join(t.TempDir(), "flowbridge.db")
+	store, err := OpenStore(cfg.DBPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+	server := NewServer(cfg, store, NewWorker(store, NewBackendClient(cfg), cfg))
+
+	validForm := url.Values{
+		"source_path": {"https://input.example/source.jpg"},
+		"scene_name":  {minimaxH3CharacterTurnaroundScene},
+		"task_id":     {"accept-minimax-h3"},
+	}
+	validRequest := httptest.NewRequest(http.MethodPost, publicMinimaxH3MultiPath, strings.NewReader(validForm.Encode()))
+	validRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	validRequest.Header.Set("Apikey", "api-key-h3")
+	validResponse := httptest.NewRecorder()
+	server.ServeHTTP(validResponse, validRequest)
+	if validResponse.Code != http.StatusOK {
+		t.Fatalf("valid status = %d, want 200: %s", validResponse.Code, validResponse.Body.String())
+	}
+	var public PublicTaskResponse
+	if err := json.Unmarshal(validResponse.Body.Bytes(), &public); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if public.TaskType != WorkflowMinimaxH3ImageVideo || public.SceneName != minimaxH3CharacterTurnaroundScene {
+		t.Fatalf("task type/scene = %q/%q", public.TaskType, public.SceneName)
+	}
+
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		form       url.Values
+		apiKey     string
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "missing api key",
+			method:     http.MethodPost,
+			path:       publicMinimaxH3MultiPath,
+			form:       url.Values{"source_path": {"https://input.example/source.jpg"}, "scene_name": {minimaxH3CharacterTurnaroundScene}},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "Apikey is required",
+		},
+		{
+			name:       "unsupported scene",
+			method:     http.MethodPost,
+			path:       publicMinimaxH3MultiPath,
+			form:       url.Values{"source_path": {"https://input.example/source.jpg"}, "scene_name": {"goal_kick_portugal"}},
+			apiKey:     "api-key-h3",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   minimaxH3CharacterTurnaroundScene,
+		},
+		{
+			name:       "different video scene",
+			method:     http.MethodPost,
+			path:       publicMinimaxH3MultiPath,
+			form:       url.Values{"source_path": {"https://input.example/source.jpg"}, "scene_name": {minimaxH3CharacterTurnaroundScene}, "video_scene_name": {"other"}},
+			apiKey:     "api-key-h3",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "must equal scene_name",
+		},
+		{
+			name:       "h3 scene on legacy route",
+			method:     http.MethodPost,
+			path:       "/api/public/generate/undress/anime/video",
+			form:       url.Values{"source_path": {"https://input.example/source.jpg"}, "scene_name": {minimaxH3CharacterTurnaroundScene}},
+			apiKey:     "api-key-h3",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   publicMinimaxH3MultiPath,
+		},
+		{
+			name:       "get is not supported",
+			method:     http.MethodGet,
+			path:       publicMinimaxH3MultiPath,
+			apiKey:     "api-key-h3",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.form.Encode()))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if test.apiKey != "" {
+				request.Header.Set("Apikey", test.apiKey)
+			}
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != test.wantStatus || (test.wantBody != "" && !strings.Contains(response.Body.String(), test.wantBody)) {
+				t.Fatalf("status/body = %d %q, want %d containing %q", response.Code, response.Body.String(), test.wantStatus, test.wantBody)
+			}
+		})
+	}
+}
+
 func TestLegacyWorkflowKeepsOriginalEndpoints(t *testing.T) {
 	req := AnimeVideoRequest{
 		SourcePath:         "https://input.example/source.jpg",

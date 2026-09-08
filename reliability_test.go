@@ -30,8 +30,8 @@ func TestNormalizeConfigEnforcesFiniteTimeouts(t *testing.T) {
 	if cfg.RequestTimeout != defaultRequestTimeout {
 		t.Fatalf("RequestTimeout = %s, want %s", cfg.RequestTimeout, defaultRequestTimeout)
 	}
-	if cfg.TaskTimeout != defaultTaskTimeout {
-		t.Fatalf("TaskTimeout = %s, want %s", cfg.TaskTimeout, defaultTaskTimeout)
+	if cfg.TaskTimeout != 72*time.Hour {
+		t.Fatalf("TaskTimeout = %s, want 72h", cfg.TaskTimeout)
 	}
 	if cfg.MaxRunnableTasks != cfg.WorkerQueueSize {
 		t.Fatalf("MaxRunnableTasks = %d, want queue size %d", cfg.MaxRunnableTasks, cfg.WorkerQueueSize)

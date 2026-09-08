@@ -271,6 +271,7 @@ func TestMinimaxH3WorkflowRoutesAndForwardsParameters(t *testing.T) {
 		HashKey:            "hash-h3",
 		APIKey:             "api-key-h3",
 		NotifyURL:          "https://callback.example/h3",
+		IsEncrypt:          true,
 		TaskID:             "bridge-h3",
 	}
 	raw, err := json.Marshal(req)
@@ -333,6 +334,7 @@ func TestMinimaxH3WorkflowRoutesAndForwardsParameters(t *testing.T) {
 		"app_id":      {req.AppID},
 		"fee":         {req.Fee},
 		"notify_url":  {req.NotifyURL},
+		"is_encrypt":  {"true"},
 		"task_id":     {"bridge-h3_video"},
 	}
 	assertValuesEqual(t, requests[1].Form, expectedVideoForm)
@@ -343,6 +345,30 @@ func TestMinimaxH3WorkflowRoutesAndForwardsParameters(t *testing.T) {
 	}
 	if detail.Status != StatusSuccess {
 		t.Fatalf("workflow status = %d, want %d", detail.Status, StatusSuccess)
+	}
+}
+
+func TestMinimaxH3EncryptIsOmittedFromFinalStepUnlessEnabled(t *testing.T) {
+	req := AnimeVideoRequest{
+		SourcePath: "https://input.example/source.jpg",
+		SceneName:  minimaxH3CharacterTurnaroundScene,
+		TaskID:     "bridge-h3-encrypt",
+	}
+	spec, videoScene, err := resolveBackendWorkflow(req)
+	if err != nil {
+		t.Fatalf("resolveBackendWorkflow: %v", err)
+	}
+	if imageForm := buildBackendImageForm(req, spec); imageForm["is_encrypt"] != "false" {
+		t.Fatalf("intermediate is_encrypt = %q, want false", imageForm["is_encrypt"])
+	}
+	videoForm := buildBackendVideoForm(req, spec, videoScene, "https://cdn.example/intermediate.jpg")
+	if value, present := videoForm["is_encrypt"]; present {
+		t.Fatalf("final is_encrypt = %q without caller opt-in; want omitted", value)
+	}
+	req.IsEncrypt = true
+	videoForm = buildBackendVideoForm(req, spec, videoScene, "https://cdn.example/intermediate.jpg")
+	if videoForm["is_encrypt"] != "true" {
+		t.Fatalf("final is_encrypt = %q, want true", videoForm["is_encrypt"])
 	}
 }
 

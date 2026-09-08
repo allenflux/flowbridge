@@ -346,7 +346,7 @@ func buildBackendImageForm(req AnimeVideoRequest, spec backendWorkflowSpec) map[
 
 func buildBackendVideoForm(req AnimeVideoRequest, spec backendWorkflowSpec, videoScene string, imageURL string) map[string]string {
 	if spec.VideoPath == backendMinimaxH3MultiPath {
-		return compactForm(map[string]string{
+		form := map[string]string{
 			"source_path": imageURL,
 			"scene_name":  videoScene,
 			"bid":         req.BID,
@@ -354,7 +354,11 @@ func buildBackendVideoForm(req AnimeVideoRequest, spec backendWorkflowSpec, vide
 			"fee":         defaultString(req.Fee, "10"),
 			"notify_url":  req.NotifyURL,
 			"task_id":     backendStepTaskID(req.TaskID, "video"),
-		})
+		}
+		if req.IsEncrypt {
+			form["is_encrypt"] = "true"
+		}
+		return compactForm(form)
 	}
 
 	form := map[string]string{

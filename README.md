@@ -19,7 +19,7 @@ Edit `config.json` first:
   "max_task_not_found": 60,
   "poll_interval": "3s",
   "request_timeout": "15s",
-  "task_timeout": "30m",
+  "task_timeout": "72h",
   "http_timeout": "30s"
 }
 ```
@@ -74,7 +74,7 @@ bash scripts/workflow_smoke.sh
 Keep `COUNT` and `CONCURRENCY` small for production smoke tests. The workflow test submits real backend jobs.
 Both scripts also accept `CURL_CONNECT_TIMEOUT` and `CURL_MAX_TIME`; every probe is bounded so a broken connection cannot hang the smoke run.
 
-`task_timeout` is a hard end-to-end deadline measured from task creation and is preserved across retries and service restarts. Non-positive values fall back to `30m`, so a stalled upstream task cannot occupy a worker forever. Increase it explicitly if valid workflows can take longer. On the first upgrade from a database without deadline metadata, existing runnable tasks are given one fresh timeout window rather than failed retroactively.
+`task_timeout` is a hard end-to-end deadline measured from task creation and is preserved across retries and service restarts. The default is `72h`; non-positive values fall back to that value, so a stalled upstream task cannot occupy a worker forever. On the first upgrade from a database without deadline metadata, existing runnable tasks are given one fresh timeout window rather than failed retroactively.
 
 `request_timeout` applies a deadline to API and admin request contexts, including time waiting for SQLite, so cooperative request work does not remain stuck indefinitely.
 
@@ -145,7 +145,7 @@ It waits for the intermediate image before submitting the video step:
 | Image | `/api/public/generate/undress/anime` | `character_turnaround_sheet_h3` |
 | Video | `/api/public/generate/videos/scenes/minimax-h3/multi` | `character_turnaround_sheet_h3` |
 
-`Apikey` is required and is forwarded to both steps. `video_scene_name` may be omitted; if supplied, it must equal `scene_name`. The intermediate image is explicitly created without encryption or watermarking. The final video request receives the intermediate image URL and the request's `bid`, `app_id`, `fee`, and `notify_url` metadata.
+`Apikey` is required and is forwarded to both steps. `video_scene_name` may be omitted; if supplied, it must equal `scene_name`. The intermediate image is explicitly created without encryption or watermarking. The final video request receives the intermediate image URL and the request's `bid`, `app_id`, `fee`, and `notify_url` metadata. If the caller supplies `is_encrypt=true`, it is forwarded only to this final video step; omitting it preserves the backend's existing default.
 
 ```bash
 curl --location 'http://127.0.0.1:8080/api/public/generate/videos/scenes/minimax-h3/multi' \
@@ -155,7 +155,8 @@ curl --location 'http://127.0.0.1:8080/api/public/generate/videos/scenes/minimax
   --data-urlencode 'source_path=https://example.com/source.jpg' \
   --data-urlencode 'scene_name=character_turnaround_sheet_h3' \
   --data-urlencode 'incoming_prompt=' \
-  --data-urlencode 'fee=10'
+  --data-urlencode 'fee=10' \
+  --data-urlencode 'is_encrypt=true'
 ```
 
 ### Dedicated one-to-one 10Eros image-to-video API

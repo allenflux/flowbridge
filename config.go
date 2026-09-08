@@ -11,7 +11,7 @@ import (
 
 const (
 	defaultRequestTimeout = 15 * time.Second
-	defaultTaskTimeout    = 30 * time.Minute
+	defaultTaskTimeout    = 72 * time.Hour
 )
 
 type Config struct {

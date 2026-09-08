@@ -355,6 +355,9 @@ func buildBackendVideoForm(req AnimeVideoRequest, spec backendWorkflowSpec, vide
 			"notify_url":  req.NotifyURL,
 			"task_id":     backendStepTaskID(req.TaskID, "video"),
 		}
+		if videoFormat := strings.TrimSpace(req.VideoFormat); videoFormat != "" && videoFormat != "video/h264-mp4" {
+			form["video_format"] = videoFormat
+		}
 		if req.IsEncrypt {
 			form["is_encrypt"] = "true"
 		}

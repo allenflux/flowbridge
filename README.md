@@ -145,7 +145,7 @@ It waits for the intermediate image before submitting the video step:
 | Image | `/api/public/generate/undress/anime` | `character_turnaround_sheet_h3` |
 | Video | `/api/public/generate/videos/scenes/minimax-h3/multi` | `character_turnaround_sheet_h3` |
 
-`Apikey` is required and is forwarded to both steps. `video_scene_name` may be omitted; if supplied, it must equal `scene_name`. The intermediate image is explicitly created without encryption or watermarking. The final video request receives the intermediate image URL and the request's `bid`, `app_id`, `fee`, and `notify_url` metadata. If the caller supplies `is_encrypt=true`, it is forwarded only to this final video step; omitting it preserves the backend's existing default.
+`Apikey` is required and is forwarded to both steps. `video_scene_name` may be omitted; if supplied, it must equal `scene_name`. The intermediate image is explicitly created without encryption or watermarking. The final video request receives the intermediate image URL and the request's `bid`, `app_id`, `fee`, `notify_url`, and `video_format` metadata. Values such as `video_format=image/webp` are forwarded only to this final video step. If the caller supplies `is_encrypt=true`, it is likewise forwarded only to the final step; omitting it preserves the backend's existing default.
 
 ```bash
 curl --location 'http://127.0.0.1:8080/api/public/generate/videos/scenes/minimax-h3/multi' \
@@ -156,6 +156,7 @@ curl --location 'http://127.0.0.1:8080/api/public/generate/videos/scenes/minimax
   --data-urlencode 'scene_name=character_turnaround_sheet_h3' \
   --data-urlencode 'incoming_prompt=' \
   --data-urlencode 'fee=10' \
+  --data-urlencode 'video_format=image/webp' \
   --data-urlencode 'is_encrypt=true'
 ```
 

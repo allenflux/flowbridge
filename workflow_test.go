@@ -264,6 +264,7 @@ func TestMinimaxH3WorkflowRoutesAndForwardsParameters(t *testing.T) {
 		VideoSceneName:     minimaxH3CharacterTurnaroundScene,
 		IncomingPrompt:     "shared prompt",
 		QwenIncomingPrompt: "image prompt",
+		VideoFormat:        "image/webp",
 		BID:                "bid-h3",
 		AppID:              "app-h3",
 		Fee:                "12",
@@ -328,14 +329,15 @@ func TestMinimaxH3WorkflowRoutesAndForwardsParameters(t *testing.T) {
 	assertValuesEqual(t, requests[0].Form, expectedImageForm)
 
 	expectedVideoForm := url.Values{
-		"source_path": {"https://cdn.example/intermediate.jpg"},
-		"scene_name":  {minimaxH3CharacterTurnaroundScene},
-		"bid":         {req.BID},
-		"app_id":      {req.AppID},
-		"fee":         {req.Fee},
-		"notify_url":  {req.NotifyURL},
-		"is_encrypt":  {"true"},
-		"task_id":     {"bridge-h3_video"},
+		"source_path":  {"https://cdn.example/intermediate.jpg"},
+		"scene_name":   {minimaxH3CharacterTurnaroundScene},
+		"bid":          {req.BID},
+		"app_id":       {req.AppID},
+		"fee":          {req.Fee},
+		"notify_url":   {req.NotifyURL},
+		"video_format": {req.VideoFormat},
+		"is_encrypt":   {"true"},
+		"task_id":      {"bridge-h3_video"},
 	}
 	assertValuesEqual(t, requests[1].Form, expectedVideoForm)
 
@@ -348,7 +350,7 @@ func TestMinimaxH3WorkflowRoutesAndForwardsParameters(t *testing.T) {
 	}
 }
 
-func TestMinimaxH3EncryptIsOmittedFromFinalStepUnlessEnabled(t *testing.T) {
+func TestMinimaxH3OptionalParametersOnlyApplyToFinalStep(t *testing.T) {
 	req := AnimeVideoRequest{
 		SourcePath: "https://input.example/source.jpg",
 		SceneName:  minimaxH3CharacterTurnaroundScene,
@@ -362,13 +364,27 @@ func TestMinimaxH3EncryptIsOmittedFromFinalStepUnlessEnabled(t *testing.T) {
 		t.Fatalf("intermediate is_encrypt = %q, want false", imageForm["is_encrypt"])
 	}
 	videoForm := buildBackendVideoForm(req, spec, videoScene, "https://cdn.example/intermediate.jpg")
+	if value, present := videoForm["video_format"]; present {
+		t.Fatalf("final video_format = %q without caller value; want omitted", value)
+	}
 	if value, present := videoForm["is_encrypt"]; present {
 		t.Fatalf("final is_encrypt = %q without caller opt-in; want omitted", value)
 	}
+	req.VideoFormat = "video/h264-mp4"
+	videoForm = buildBackendVideoForm(req, spec, videoScene, "https://cdn.example/intermediate.jpg")
+	if value, present := videoForm["video_format"]; present {
+		t.Fatalf("legacy default video_format = %q; want omitted", value)
+	}
+	req.VideoFormat = ""
 	req.IsEncrypt = true
 	videoForm = buildBackendVideoForm(req, spec, videoScene, "https://cdn.example/intermediate.jpg")
 	if videoForm["is_encrypt"] != "true" {
 		t.Fatalf("final is_encrypt = %q, want true", videoForm["is_encrypt"])
+	}
+	req.VideoFormat = "image/webp"
+	videoForm = buildBackendVideoForm(req, spec, videoScene, "https://cdn.example/intermediate.jpg")
+	if videoForm["video_format"] != "image/webp" {
+		t.Fatalf("final video_format = %q, want image/webp", videoForm["video_format"])
 	}
 }
 
@@ -383,9 +399,11 @@ func TestMinimaxH3PublicRouteIsolatedAndValidated(t *testing.T) {
 	server := NewServer(cfg, store, NewWorker(store, NewBackendClient(cfg), cfg))
 
 	validForm := url.Values{
-		"source_path": {"https://input.example/source.jpg"},
-		"scene_name":  {minimaxH3CharacterTurnaroundScene},
-		"task_id":     {"accept-minimax-h3"},
+		"source_path":  {"https://input.example/source.jpg"},
+		"scene_name":   {minimaxH3CharacterTurnaroundScene},
+		"video_format": {"image/webp"},
+		"is_encrypt":   {"true"},
+		"task_id":      {"accept-minimax-h3"},
 	}
 	validRequest := httptest.NewRequest(http.MethodPost, publicMinimaxH3MultiPath, strings.NewReader(validForm.Encode()))
 	validRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -401,6 +419,17 @@ func TestMinimaxH3PublicRouteIsolatedAndValidated(t *testing.T) {
 	}
 	if public.TaskType != WorkflowMinimaxH3ImageVideo || public.SceneName != minimaxH3CharacterTurnaroundScene {
 		t.Fatalf("task type/scene = %q/%q", public.TaskType, public.SceneName)
+	}
+	if public.VideoFormat != "image/webp" || !public.IsEncrypt {
+		t.Fatalf("video_format/is_encrypt = %q/%t", public.VideoFormat, public.IsEncrypt)
+	}
+	detail, err := store.GetTaskDetail(context.Background(), "accept-minimax-h3")
+	if err != nil {
+		t.Fatalf("GetTaskDetail: %v", err)
+	}
+	stored := requestFromRaw(detail.RequestPayload)
+	if stored.VideoFormat != "image/webp" || !stored.IsEncrypt {
+		t.Fatalf("stored video_format/is_encrypt = %q/%t", stored.VideoFormat, stored.IsEncrypt)
 	}
 
 	tests := []struct {

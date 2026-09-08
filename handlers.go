@@ -222,7 +222,7 @@ func (s *Server) createImageToVideoWorkflow(w http.ResponseWriter, r *http.Reque
 	if route == publicWorkflowLegacy && req.OutputFormat == "" {
 		req.OutputFormat = "video"
 	}
-	if req.VideoFormat == "" {
+	if route != publicWorkflowMinimaxH3 && req.VideoFormat == "" {
 		req.VideoFormat = "video/h264-mp4"
 	}
 	if route == publicWorkflowTenEros && req.VideoFormat != "video/h264-mp4" && req.VideoFormat != "video/h265-mp4" {

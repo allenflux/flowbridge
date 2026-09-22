@@ -557,7 +557,7 @@ func TestBatchResultPayloadLimitPreventsMemoryAmplification(t *testing.T) {
 	}
 }
 
-func TestBootstrapFaviconIsEmbeddedAndServedLocally(t *testing.T) {
+func TestFlowBridgeLetterFaviconIsEmbeddedAndServedLocally(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.DBPath = filepath.Join(t.TempDir(), "flowbridge.db")
 	store, err := OpenStore(cfg.DBPath)
@@ -567,7 +567,7 @@ func TestBootstrapFaviconIsEmbeddedAndServedLocally(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	server := NewServer(cfg, store, NewWorker(store, NewBackendClient(cfg), cfg))
-	request := httptest.NewRequest(http.MethodGet, "/favicon.svg?v=1.13.1", nil)
+	request := httptest.NewRequest(http.MethodGet, "/favicon.svg?v=fb-1", nil)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -577,8 +577,15 @@ func TestBootstrapFaviconIsEmbeddedAndServedLocally(t *testing.T) {
 	if contentType := response.Header().Get("Content-Type"); contentType != "image/svg+xml" {
 		t.Fatalf("Content-Type = %q", contentType)
 	}
-	if !strings.Contains(response.Body.String(), "bi-arrow-left-right") {
-		t.Fatalf("favicon is not the expected Bootstrap icon: %s", response.Body.String())
+	if contentTypeOptions := response.Header().Get("X-Content-Type-Options"); contentTypeOptions != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q", contentTypeOptions)
+	}
+	if cacheControl := response.Header().Get("Cache-Control"); cacheControl != "public, max-age=604800, immutable" {
+		t.Fatalf("Cache-Control = %q", cacheControl)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "FlowBridge") || !strings.Contains(body, "#4A154B") || !strings.Contains(body, ">FB</text>") {
+		t.Fatalf("favicon is not the expected FlowBridge letter mark: %s", body)
 	}
 }
 

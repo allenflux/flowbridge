@@ -1,0 +1,209 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "FlowBridge 10Eros 第二批组合工作流 API",
+    "version": "1.0.0",
+    "description": "10 个第二批 10Eros 场景的独立组合入口。第一步调用 Qwen two-image，成功后将中间图传给 LTX 8s；两步使用相同 scene_name。"
+  },
+  "host": "flowbridge.inaiai.com",
+  "basePath": "/",
+  "schemes": ["https"],
+  "consumes": ["application/x-www-form-urlencoded"],
+  "produces": ["application/json"],
+  "paths": {
+    "/api/public/generate/10eros/batch-2/image-to-video": {
+      "post": {
+        "summary": "提交第二批 10Eros 生图转视频组合任务",
+        "description": "先调用 /api/public/generate/qwen/two-image，再调用 /api/public/generate/videos/scenes/8s/ltx。双人模板要求 source_path 和 target_path；单人模板只要求 source_path。中间图固定关闭加密和水印，最终视频才应用调用方设置。",
+        "operationId": "createTenErosBatch2ImageToVideoWorkflow",
+        "parameters": [
+          {
+            "name": "Apikey",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "description": "用户后端 API Key；透传给两个后端步骤"
+          },
+          {
+            "name": "source_path",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "description": "第一张人物图片 URL"
+          },
+          {
+            "name": "target_path",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "description": "第二张人物图片 URL；双人模板必填，单人模板省略"
+          },
+          {
+            "name": "scene_name",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "enum": [
+              "gay_oral_cumshot_10eros",
+              "lesbian_cunnilingus_10eros",
+              "gay_bondage_10eros",
+              "gay_crossdressing_10eros",
+              "gay_butt_slap_10eros",
+              "gay_kneeling_doggy_10eros",
+              "lesbian_strap_on_10eros",
+              "lesbian_doggy_10eros",
+              "lesbian_cowgirl_10eros",
+              "gay_bar_doggy_10ero"
+            ],
+            "description": "第一步与第二步使用同一个场景名"
+          },
+          {
+            "name": "video_scene_name",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "description": "建议省略；如传入，必须等于 scene_name"
+          },
+          {
+            "name": "incoming_prompt",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "两个步骤共享的兜底提示词"
+          },
+          {
+            "name": "qwen_incoming_prompt",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "第一步 Qwen 提示词；默认使用 incoming_prompt"
+          },
+          {
+            "name": "wan_incoming_prompt",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "第二步 LTX 提示词；默认使用 incoming_prompt"
+          },
+          {
+            "name": "audio_enabled",
+            "in": "formData",
+            "required": false,
+            "type": "boolean",
+            "default": true,
+            "description": "最终 LTX 视频音频开关"
+          },
+          {
+            "name": "video_format",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "enum": ["video/h264-mp4", "video/h265-mp4"],
+            "default": "video/h264-mp4",
+            "description": "最终视频编码格式"
+          },
+          {
+            "name": "is_watermark",
+            "in": "formData",
+            "required": false,
+            "type": "boolean",
+            "default": true,
+            "description": "仅控制最终视频水印；兼容 watermark 别名"
+          },
+          {
+            "name": "is_encrypt",
+            "in": "formData",
+            "required": false,
+            "type": "boolean",
+            "default": false,
+            "description": "仅控制最终视频加密"
+          },
+          {
+            "name": "bid",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": ""
+          },
+          {
+            "name": "app_id",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": ""
+          },
+          {
+            "name": "fee",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "10"
+          },
+          {
+            "name": "title",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": ""
+          },
+          {
+            "name": "hash_key",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "仅发送给最终 LTX 步骤"
+          },
+          {
+            "name": "notify_url",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "default": "",
+            "description": "仅发送给最终 LTX 步骤，避免中间步骤重复回调"
+          },
+          {
+            "name": "task_id",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "description": "调用方幂等任务 ID；省略时由 FlowBridge 生成"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务已持久化并进入队列",
+            "schema": {"$ref": "#/definitions/WorkflowTask"}
+          },
+          "400": {"description": "参数或场景不合法"},
+          "409": {"description": "task_id 冲突"},
+          "503": {"description": "持久任务积压达到上限"}
+        }
+      }
+    }
+  },
+  "definitions": {
+    "WorkflowTask": {
+      "type": "object",
+      "properties": {
+        "uuid": {"type": "string", "example": "batch2_gay_oral_001"},
+        "task_id": {"type": "string", "example": "batch2_gay_oral_001"},
+        "status": {"type": "integer", "format": "int32", "example": 0},
+        "task_type": {"type": "string", "example": "10eros_batch2_image_to_video"},
+        "source_path": {"type": "string"},
+        "target_path": {"type": "string"},
+        "scene_name": {"type": "string"},
+        "video_format": {"type": "string"},
+        "audio_enabled": {"type": "boolean"},
+        "is_watermark": {"type": "boolean"},
+        "is_encrypt": {"type": "boolean"},
+        "current_step": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

@@ -13,11 +13,12 @@ const (
 )
 
 const (
-	WorkflowAnimeUndressVideo   = "anime_undress_video"
-	WorkflowTenErosImageVideo   = "10eros_image_to_video"
-	WorkflowMinimaxH3ImageVideo = "minimax_h3_image_to_video"
-	StepAnimeImage              = "anime_image"
-	StepAnimeVideo              = "anime_video"
+	WorkflowAnimeUndressVideo       = "anime_undress_video"
+	WorkflowTenErosImageVideo       = "10eros_image_to_video"
+	WorkflowTenErosBatch2ImageVideo = "10eros_batch2_image_to_video"
+	WorkflowMinimaxH3ImageVideo     = "minimax_h3_image_to_video"
+	StepAnimeImage                  = "anime_image"
+	StepAnimeVideo                  = "anime_video"
 )
 
 type WorkflowTask struct {

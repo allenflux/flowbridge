@@ -226,7 +226,7 @@ func (w *Worker) runTask(parent context.Context, id int64) error {
 		return err
 	}
 	req.APIKey = taskAPIKey(task.RequestPayload, req.APIKey)
-	spec, videoScene, err := resolveBackendWorkflow(req)
+	spec, videoScene, err := resolveBackendWorkflowForType(task.WorkflowType, req)
 	if err != nil {
 		w.markTaskFailed(id, err.Error())
 		return err
@@ -338,7 +338,7 @@ func buildBackendImageForm(req AnimeVideoRequest, spec backendWorkflowSpec) map[
 		spec.VideoPath != backendLTX8sVideoPath && spec.VideoPath != backendMinimaxH3MultiPath,
 	)
 
-	if spec.ImagePath == backendQwenTwoImagePath {
+	if spec.ImagePath == backendQwenTwoImagePath && spec.RequiresTargetPath {
 		form["target_path"] = req.TargetPath
 	}
 	return compactForm(form)

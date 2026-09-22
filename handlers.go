@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	publicTenErosImageToVideoPath = "/api/public/generate/10eros/image-to-video"
-	publicMinimaxH3MultiPath      = backendMinimaxH3MultiPath
-	publicTaskDetailsPath         = "/api/public/task/details"
-	maxPublicTaskDetailsIDs       = 1000
+	publicTenErosImageToVideoPath       = "/api/public/generate/10eros/image-to-video"
+	publicTenErosBatch2ImageToVideoPath = "/api/public/generate/10eros/batch-2/image-to-video"
+	publicMinimaxH3MultiPath            = backendMinimaxH3MultiPath
+	publicTaskDetailsPath               = "/api/public/task/details"
+	maxPublicTaskDetailsIDs             = 1000
 )
 
 type publicWorkflowRoute uint8
@@ -30,6 +31,7 @@ type publicWorkflowRoute uint8
 const (
 	publicWorkflowLegacy publicWorkflowRoute = iota
 	publicWorkflowTenEros
+	publicWorkflowTenErosBatch2
 	publicWorkflowMinimaxH3
 )
 
@@ -88,6 +90,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/public/generate/undress/anime/video", s.createAnimeVideoWorkflow)
 	s.mux.HandleFunc("POST /api/public/workflow/undress/anime/video", s.createAnimeVideoWorkflow)
 	s.mux.HandleFunc("POST "+publicTenErosImageToVideoPath, s.createTenErosImageToVideoWorkflow)
+	s.mux.HandleFunc("POST "+publicTenErosBatch2ImageToVideoPath, s.createTenErosBatch2ImageToVideoWorkflow)
 	s.mux.HandleFunc("POST "+publicMinimaxH3MultiPath, s.createMinimaxH3ImageToVideoWorkflow)
 	s.mux.HandleFunc("GET /api/public/task", s.getPublicTask)
 	s.mux.HandleFunc("POST /api/public/task", s.getPublicTask)
@@ -110,6 +113,7 @@ func (s *Server) favicon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
 	w.Header().Set("Content-Length", strconv.Itoa(len(icon)))
 	_, _ = w.Write(icon)
@@ -145,8 +149,66 @@ func (s *Server) createTenErosImageToVideoWorkflow(w http.ResponseWriter, r *htt
 	s.createImageToVideoWorkflow(w, r, publicWorkflowTenEros)
 }
 
+func (s *Server) createTenErosBatch2ImageToVideoWorkflow(w http.ResponseWriter, r *http.Request) {
+	s.createImageToVideoWorkflow(w, r, publicWorkflowTenErosBatch2)
+}
+
 func (s *Server) createMinimaxH3ImageToVideoWorkflow(w http.ResponseWriter, r *http.Request) {
 	s.createImageToVideoWorkflow(w, r, publicWorkflowMinimaxH3)
+}
+
+func workflowTypeForPublicRoute(route publicWorkflowRoute) string {
+	switch route {
+	case publicWorkflowTenEros:
+		return WorkflowTenErosImageVideo
+	case publicWorkflowTenErosBatch2:
+		return WorkflowTenErosBatch2ImageVideo
+	case publicWorkflowMinimaxH3:
+		return WorkflowMinimaxH3ImageVideo
+	default:
+		return WorkflowAnimeUndressVideo
+	}
+}
+
+func publicPathForWorkflowType(workflowType string) string {
+	switch workflowType {
+	case WorkflowTenErosImageVideo:
+		return publicTenErosImageToVideoPath
+	case WorkflowTenErosBatch2ImageVideo:
+		return publicTenErosBatch2ImageToVideoPath
+	case WorkflowMinimaxH3ImageVideo:
+		return publicMinimaxH3MultiPath
+	default:
+		return "/api/public/generate/undress/anime/video"
+	}
+}
+
+func publicWorkflowLabel(route publicWorkflowRoute) string {
+	switch route {
+	case publicWorkflowTenEros:
+		return "10eros image-to-video"
+	case publicWorkflowTenErosBatch2:
+		return "10eros batch-2 image-to-video"
+	case publicWorkflowMinimaxH3:
+		return "minimax-h3 image-to-video"
+	default:
+		return "legacy anime image-to-video"
+	}
+}
+
+func validatePublicWorkflowRoute(route publicWorkflowRoute, sceneName string) error {
+	expectedType := workflowTypeForPublicRoute(route)
+	actualType := workflowTypeForScene(sceneName)
+	if actualType == expectedType {
+		return nil
+	}
+	if actualType != WorkflowAnimeUndressVideo {
+		return fmt.Errorf("scene_name %q must use %s", sceneName, publicPathForWorkflowType(actualType))
+	}
+	if route == publicWorkflowMinimaxH3 {
+		return fmt.Errorf("scene_name must be %q", minimaxH3CharacterTurnaroundScene)
+	}
+	return fmt.Errorf("scene_name is not supported by the %s workflow", publicWorkflowLabel(route))
 }
 
 func (s *Server) createImageToVideoWorkflow(w http.ResponseWriter, r *http.Request, route publicWorkflowRoute) {
@@ -168,47 +230,27 @@ func (s *Server) createImageToVideoWorkflow(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "source_path is required"})
 		return
 	}
-	_, isTenEros := tenErosBackendWorkflowSpecs[req.SceneName]
-	_, isMinimaxH3 := minimaxH3BackendWorkflowSpecs[req.SceneName]
-	switch route {
-	case publicWorkflowTenEros:
-		if !isTenEros {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": "scene_name is not supported by the 10eros image-to-video workflow",
-			})
-			return
-		}
-	case publicWorkflowMinimaxH3:
-		if !isMinimaxH3 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": fmt.Sprintf("scene_name must be %q", minimaxH3CharacterTurnaroundScene),
-			})
-			return
-		}
-	default:
-		if isTenEros {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": fmt.Sprintf("scene_name %q must use %s", req.SceneName, publicTenErosImageToVideoPath),
-			})
-			return
-		}
-		if isMinimaxH3 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": fmt.Sprintf("scene_name %q must use %s", req.SceneName, publicMinimaxH3MultiPath),
-			})
-			return
-		}
+	if err := validatePublicWorkflowRoute(route, req.SceneName); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
 	}
 	if route != publicWorkflowLegacy && strings.TrimSpace(req.APIKey) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Apikey is required"})
 		return
 	}
-	spec, resolvedVideoScene, err := resolveBackendWorkflow(req)
+	workflowType := workflowTypeForPublicRoute(route)
+	var spec backendWorkflowSpec
+	var resolvedVideoScene string
+	if route == publicWorkflowLegacy {
+		spec, resolvedVideoScene, err = resolveBackendWorkflow(req)
+	} else {
+		spec, resolvedVideoScene, err = resolveBackendWorkflowForType(workflowType, req)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	if isTenEros || isMinimaxH3 {
+	if route != publicWorkflowLegacy {
 		req.VideoSceneName = resolvedVideoScene
 	}
 	taskID := strings.TrimSpace(req.TaskID)
@@ -225,7 +267,7 @@ func (s *Server) createImageToVideoWorkflow(w http.ResponseWriter, r *http.Reque
 	if route != publicWorkflowMinimaxH3 && req.VideoFormat == "" {
 		req.VideoFormat = "video/h264-mp4"
 	}
-	if route == publicWorkflowTenEros && req.VideoFormat != "video/h264-mp4" && req.VideoFormat != "video/h265-mp4" {
+	if spec.VideoPath == backendLTX8sVideoPath && req.VideoFormat != "video/h264-mp4" && req.VideoFormat != "video/h265-mp4" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "video_format must be video/h264-mp4 or video/h265-mp4",
 		})
@@ -267,7 +309,7 @@ func (s *Server) createImageToVideoWorkflow(w http.ResponseWriter, r *http.Reque
 		})
 		return
 	}
-	task, err := s.store.CreateAnimeVideoTask(r.Context(), taskID, req, raw)
+	task, err := s.store.CreateAnimeVideoTaskForWorkflow(r.Context(), taskID, workflowType, req, raw)
 	if err != nil {
 		if writeRequestTimeout(w, err) {
 			return

@@ -220,6 +220,35 @@ curl --location 'http://127.0.0.1:8080/api/public/generate/10eros/image-to-video
   --data-urlencode 'video_format=video/h264-mp4'
 ```
 
+### Dedicated second-batch 10Eros image-to-video API
+
+The second batch has its own FlowBridge endpoint:
+
+```text
+POST /api/public/generate/10eros/batch-2/image-to-video
+```
+
+See the [Chinese API guide](docs/10eros-batch2-image-to-video-api.md) and the [YApi-importable Swagger file](docs/flowbridge-10eros-batch2-openapi.json) for the complete contract.
+
+All 10 scenes run the same two-step workflow: FlowBridge submits the image step to `/api/public/generate/qwen/two-image`, waits for the intermediate image URL, and passes it as `source_path` to `/api/public/generate/videos/scenes/8s/ltx`. The same `scene_name` is used for both steps.
+
+| `scene_name` | Input rule |
+| --- | --- |
+| `gay_oral_cumshot_10eros` | `source_path` + required `target_path` |
+| `lesbian_cunnilingus_10eros` | `source_path` + required `target_path` |
+| `gay_bondage_10eros` | `source_path` + required `target_path` |
+| `gay_crossdressing_10eros` | `source_path` only; omit `target_path` |
+| `gay_butt_slap_10eros` | `source_path` only; omit `target_path` |
+| `gay_kneeling_doggy_10eros` | `source_path` + required `target_path` |
+| `lesbian_strap_on_10eros` | `source_path` + required `target_path` |
+| `lesbian_doggy_10eros` | `source_path` + required `target_path` |
+| `lesbian_cowgirl_10eros` | `source_path` + required `target_path` |
+| `gay_bar_doggy_10ero` | `source_path` + required `target_path` |
+
+`gay_bar_doggy_10ero` intentionally has no trailing `s`, matching the backend scene name. `video_scene_name` may be omitted; if supplied, it must equal `scene_name`.
+
+The intermediate Qwen image is always submitted with `is_encrypt=false` and `is_watermark=false`. The requested `video_format` and `is_encrypt` values are sent only to the final LTX video step; `video_format` defaults to `video/h264-mp4`, and `is_encrypt` defaults to `false`.
+
 Query bridge task:
 
 ```text
@@ -245,7 +274,7 @@ Admin console:
 /admin/workflows/{task_id}
 ```
 
-The tab favicon is the unmodified Bootstrap Icons `arrow-left-right` SVG, embedded locally so the icon does not depend on a CDN at request time. Its MIT notice is in `static/BOOTSTRAP-ICONS-LICENSE`.
+The tab favicon is a locally embedded `FB` letter-mark SVG (`static/favicon.svg`), so it does not depend on a CDN at request time.
 
 Liveness and readiness probes:
 

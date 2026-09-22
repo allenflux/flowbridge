@@ -157,13 +157,11 @@ func (s *Store) workflowTaskColumnExists(ctx context.Context, target string) (bo
 }
 
 func (s *Store) CreateAnimeVideoTask(ctx context.Context, taskID string, req AnimeVideoRequest, raw json.RawMessage) (*WorkflowTask, error) {
+	return s.CreateAnimeVideoTaskForWorkflow(ctx, taskID, workflowTypeForScene(req.SceneName), req, raw)
+}
+
+func (s *Store) CreateAnimeVideoTaskForWorkflow(ctx context.Context, taskID string, workflowType string, req AnimeVideoRequest, raw json.RawMessage) (*WorkflowTask, error) {
 	now := time.Now().UTC()
-	workflowType := WorkflowAnimeUndressVideo
-	if _, ok := tenErosBackendWorkflowSpecs[req.SceneName]; ok {
-		workflowType = WorkflowTenErosImageVideo
-	} else if _, ok := minimaxH3BackendWorkflowSpecs[req.SceneName]; ok {
-		workflowType = WorkflowMinimaxH3ImageVideo
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

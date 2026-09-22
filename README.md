@@ -234,18 +234,18 @@ All 10 scenes run the same two-step workflow: FlowBridge submits the image step 
 
 | `scene_name` | Input rule |
 | --- | --- |
-| `gay_oral_cumshot_10eros` | `source_path` + required `target_path` |
-| `lesbian_cunnilingus_10eros` | `source_path` + required `target_path` |
-| `gay_bondage_10eros` | `source_path` + required `target_path` |
+| `gay_oral_cumshot_10eros` | `source_path` only; omit `target_path` |
+| `lesbian_cunnilingus_10eros` | `source_path` only; omit `target_path` |
+| `gay_bondage_10eros` | `source_path` only; omit `target_path` |
 | `gay_crossdressing_10eros` | `source_path` only; omit `target_path` |
 | `gay_butt_slap_10eros` | `source_path` only; omit `target_path` |
-| `gay_kneeling_doggy_10eros` | `source_path` + required `target_path` |
+| `gay_kneeling_doggy_10eros` | `source_path` only; omit `target_path` |
 | `lesbian_strap_on_10eros` | `source_path` + required `target_path` |
 | `lesbian_doggy_10eros` | `source_path` + required `target_path` |
 | `lesbian_cowgirl_10eros` | `source_path` + required `target_path` |
-| `gay_bar_doggy_10ero` | `source_path` + required `target_path` |
+| `gay_bar_doggy_10eros` | `source_path` + required `target_path` |
 
-`gay_bar_doggy_10ero` intentionally has no trailing `s`, matching the backend scene name. `video_scene_name` may be omitted; if supplied, it must equal `scene_name`.
+`video_scene_name` may be omitted; if supplied, it must equal `scene_name`.
 
 The intermediate Qwen image is always submitted with `is_encrypt=false` and `is_watermark=false`. The requested `video_format` and `is_encrypt` values are sent only to the final LTX video step; `video_format` defaults to `video/h264-mp4`, and `is_encrypt` defaults to `false`.
 

@@ -18,16 +18,16 @@ var tenErosBatch2Scenes = []struct {
 	name               string
 	requiresTargetPath bool
 }{
-	{name: "gay_oral_cumshot_10eros", requiresTargetPath: true},
-	{name: "lesbian_cunnilingus_10eros", requiresTargetPath: true},
-	{name: "gay_bondage_10eros", requiresTargetPath: true},
+	{name: "gay_oral_cumshot_10eros"},
+	{name: "lesbian_cunnilingus_10eros"},
+	{name: "gay_bondage_10eros"},
 	{name: "gay_crossdressing_10eros"},
 	{name: "gay_butt_slap_10eros"},
-	{name: "gay_kneeling_doggy_10eros", requiresTargetPath: true},
+	{name: "gay_kneeling_doggy_10eros"},
 	{name: "lesbian_strap_on_10eros", requiresTargetPath: true},
 	{name: "lesbian_doggy_10eros", requiresTargetPath: true},
 	{name: "lesbian_cowgirl_10eros", requiresTargetPath: true},
-	{name: "gay_bar_doggy_10ero", requiresTargetPath: true},
+	{name: tenErosBatch2GayBarDoggyScene, requiresTargetPath: true},
 }
 
 func TestTenErosBatch2SpecsAreExactAndIsolated(t *testing.T) {
@@ -62,12 +62,21 @@ func TestTenErosBatch2SpecsAreExactAndIsolated(t *testing.T) {
 
 func TestTenErosBatch2WorkflowForwardsSingleAndTwoImageScenes(t *testing.T) {
 	tests := []struct {
-		name       string
-		scene      string
-		targetPath string
+		name              string
+		scene             string
+		targetPath        string
+		wantScene         string
+		wantTargetForward bool
 	}{
-		{name: "two image", scene: "gay_oral_cumshot_10eros", targetPath: "https://input.example/person-2.jpg"},
-		{name: "single image", scene: "gay_crossdressing_10eros", targetPath: "https://input.example/ignored-for-single-person.jpg"},
+		{name: "two image", scene: "lesbian_strap_on_10eros", targetPath: "https://input.example/person-2.jpg", wantTargetForward: true},
+		{name: "single image", scene: "gay_oral_cumshot_10eros", targetPath: "https://input.example/ignored-for-single-image.jpg"},
+		{
+			name:              "stored legacy gay bar spelling",
+			scene:             legacyGayBarDoggyScene,
+			targetPath:        "https://input.example/person-2.jpg",
+			wantScene:         tenErosBatch2GayBarDoggyScene,
+			wantTargetForward: true,
+		},
 	}
 
 	for _, test := range tests {
@@ -135,16 +144,17 @@ func TestTenErosBatch2WorkflowForwardsSingleAndTwoImageScenes(t *testing.T) {
 			if requests[0].Path != backendQwenTwoImagePath || requests[1].Path != backendLTX8sVideoPath {
 				t.Fatalf("backend routes = %q -> %q", requests[0].Path, requests[1].Path)
 			}
+			wantScene := defaultString(test.wantScene, req.SceneName)
 			for index, request := range requests {
 				if request.APIKey != req.APIKey {
 					t.Errorf("request %d Apikey = %q", index, request.APIKey)
 				}
-				if request.Form.Get("scene_name") != req.SceneName {
+				if request.Form.Get("scene_name") != wantScene {
 					t.Errorf("request %d scene_name = %q", index, request.Form.Get("scene_name"))
 				}
 			}
 			wantTargetPath := ""
-			if test.name == "two image" {
+			if test.wantTargetForward {
 				wantTargetPath = req.TargetPath
 			}
 			if requests[0].Form.Get("target_path") != wantTargetPath {
@@ -250,6 +260,13 @@ func TestTenErosBatch2ValidationAndRouteIsolation(t *testing.T) {
 		wantStatus int
 		wantBody   string
 	}{
+		{
+			name:       "legacy typo rejected by batch-2 route",
+			path:       publicTenErosBatch2ImageToVideoPath,
+			form:       url.Values{"source_path": {"https://input.example/person.jpg"}, "target_path": {"https://input.example/target.jpg"}, "scene_name": {legacyGayBarDoggyScene}},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "not supported by the 10eros batch-2",
+		},
 		{
 			name:       "batch-2 scene rejected by legacy route",
 			path:       "/api/public/generate/undress/anime/video",

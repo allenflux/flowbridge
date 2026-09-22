@@ -225,6 +225,7 @@ func (w *Worker) runTask(parent context.Context, id int64) error {
 		w.markTaskFailed(id, "invalid stored request payload: "+err.Error())
 		return err
 	}
+	req = normalizeStoredWorkflowRequest(task.WorkflowType, req)
 	req.APIKey = taskAPIKey(task.RequestPayload, req.APIKey)
 	spec, videoScene, err := resolveBackendWorkflowForType(task.WorkflowType, req)
 	if err != nil {

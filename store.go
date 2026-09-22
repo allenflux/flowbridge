@@ -395,6 +395,51 @@ func (s *Store) CountTasks(ctx context.Context) (int, error) {
 	return total, err
 }
 
+func (s *Store) CountTasksMatching(ctx context.Context, search string) (int, error) {
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return s.CountTasks(ctx)
+	}
+	var total int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*)
+		FROM workflow_tasks AS task
+		WHERE instr(task.task_id, ?) > 0
+			OR EXISTS (
+				SELECT 1 FROM workflow_steps AS step
+				WHERE step.workflow_task_id = task.id
+					AND (
+						instr(step.backend_task_id, ?) > 0
+						OR (
+							json_valid(step.response_payload)
+							AND instr(COALESCE(CAST(json_extract(step.response_payload, '$.uuid') AS TEXT), ''), ?) > 0
+						)
+					)
+			)`, search, search, search).Scan(&total)
+	return total, err
+}
+
+func (s *Store) FindWorkflowTaskIDByBackendReference(ctx context.Context, reference string) (string, error) {
+	reference = strings.TrimSpace(reference)
+	var taskID string
+	err := s.db.QueryRowContext(ctx, `SELECT task.task_id
+		FROM workflow_steps AS step
+		JOIN workflow_tasks AS task ON task.id = step.workflow_task_id
+		WHERE step.backend_task_id = ?
+		ORDER BY task.id DESC
+		LIMIT 1`, reference).Scan(&taskID)
+	if err == nil || !errors.Is(err, sql.ErrNoRows) {
+		return taskID, err
+	}
+	err = s.db.QueryRowContext(ctx, `SELECT task.task_id
+		FROM workflow_steps AS step
+		JOIN workflow_tasks AS task ON task.id = step.workflow_task_id
+		WHERE json_valid(step.response_payload)
+			AND COALESCE(CAST(json_extract(step.response_payload, '$.uuid') AS TEXT), '') = ?
+		ORDER BY task.id DESC
+		LIMIT 1`, reference).Scan(&taskID)
+	return taskID, err
+}
+
 func (s *Store) CountRunnableTasks(ctx context.Context) (int, error) {
 	var total int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_tasks WHERE status IN (0, 1)`).Scan(&total)
@@ -408,9 +453,42 @@ func (s *Store) ListTasks(ctx context.Context, limit int, offset int) ([]Workflo
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, task_id, workflow_type, status, current_step,
+	return s.listTasksByQuery(ctx, `SELECT id, task_id, workflow_type, status, current_step,
 		error_message, created_at, updated_at, finished_at
 		FROM workflow_tasks ORDER BY id DESC LIMIT ? OFFSET ?`, limit, offset)
+}
+
+func (s *Store) ListTasksMatching(ctx context.Context, search string, limit int, offset int) ([]WorkflowTask, error) {
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return s.ListTasks(ctx, limit, offset)
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return s.listTasksByQuery(ctx, `SELECT task.id, task.task_id, task.workflow_type, task.status, task.current_step,
+		task.error_message, task.created_at, task.updated_at, task.finished_at
+		FROM workflow_tasks AS task
+		WHERE instr(task.task_id, ?) > 0
+			OR EXISTS (
+				SELECT 1 FROM workflow_steps AS step
+				WHERE step.workflow_task_id = task.id
+					AND (
+						instr(step.backend_task_id, ?) > 0
+						OR (
+							json_valid(step.response_payload)
+							AND instr(COALESCE(CAST(json_extract(step.response_payload, '$.uuid') AS TEXT), ''), ?) > 0
+						)
+					)
+			)
+		ORDER BY task.id DESC LIMIT ? OFFSET ?`, search, search, search, limit, offset)
+}
+
+func (s *Store) listTasksByQuery(ctx context.Context, query string, args ...any) ([]WorkflowTask, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

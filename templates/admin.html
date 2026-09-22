@@ -59,9 +59,10 @@
     <div class="text-secondary">Track bridge task progress and backend step execution.</div>
   </div>
   <form class="d-flex gap-2" method="get" action="/admin/workflows">
-    <input class="form-control" style="min-width: 320px" name="task_id" value="{{.TaskID}}" placeholder="Search bridge task_id">
+    <input class="form-control" style="min-width: 320px" name="task_id" value="{{.TaskID}}" placeholder="Search workflow or backend task ID">
     <input type="hidden" name="page_size" value="{{.PageSize}}">
     <button class="btn btn-primary" type="submit">Search</button>
+    {{if .TaskID}}<a class="btn btn-outline-secondary" href="/admin/workflows?page_size={{.PageSize}}">Clear</a>{{end}}
   </form>
 </div>
 
@@ -69,6 +70,7 @@
   <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 px-3 py-2 border-bottom">
     <div class="text-secondary small">Total {{.Total}} · Page {{.Page}} / {{.TotalPages}}</div>
     <form class="d-flex align-items-center gap-2" method="get" action="/admin/workflows">
+      {{if .TaskID}}<input type="hidden" name="task_id" value="{{.TaskID}}">{{end}}
       <label class="text-secondary small" for="page-size">Page size</label>
       <select class="form-select form-select-sm" id="page-size" name="page_size" style="width: 90px" onchange="this.form.submit()">
         <option value="25" {{if eq .PageSize 25}}selected{{end}}>25</option>
@@ -101,20 +103,20 @@
           <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/admin/workflows/{{.TaskID}}">Open</a></td>
         </tr>
         {{else}}
-        <tr><td colspan="6" class="text-center text-secondary py-5">No workflow tasks yet.</td></tr>
+        <tr><td colspan="6" class="text-center text-secondary py-5">{{if $.TaskID}}No workflow tasks match <code>{{$.TaskID}}</code>.{{else}}No workflow tasks yet.{{end}}</td></tr>
         {{end}}
       </tbody>
     </table>
   </div>
   <div class="d-flex justify-content-between align-items-center px-3 py-3 border-top">
     {{if .HasPrev}}
-    <a class="btn btn-sm btn-outline-secondary" href="/admin/workflows?page={{.PrevPage}}&page_size={{.PageSize}}">Previous</a>
+    <a class="btn btn-sm btn-outline-secondary" href="/admin/workflows?page={{.PrevPage}}&page_size={{.PageSize}}{{if .TaskID}}&task_id={{urlquery .TaskID}}{{end}}">Previous</a>
     {{else}}
     <button class="btn btn-sm btn-outline-secondary" disabled>Previous</button>
     {{end}}
     <span class="text-secondary small">Page {{.Page}} of {{.TotalPages}}</span>
     {{if .HasNext}}
-    <a class="btn btn-sm btn-outline-secondary" href="/admin/workflows?page={{.NextPage}}&page_size={{.PageSize}}">Next</a>
+    <a class="btn btn-sm btn-outline-secondary" href="/admin/workflows?page={{.NextPage}}&page_size={{.PageSize}}{{if .TaskID}}&task_id={{urlquery .TaskID}}{{end}}">Next</a>
     {{else}}
     <button class="btn btn-sm btn-outline-secondary" disabled>Next</button>
     {{end}}

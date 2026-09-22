@@ -13,6 +13,10 @@ const (
 	backendMinimaxH3MultiPath    = "/api/public/generate/videos/scenes/minimax-h3/multi"
 
 	minimaxH3CharacterTurnaroundScene = "character_turnaround_sheet_h3"
+	tenErosBatch2GayBarDoggyScene     = "gay_bar_doggy_10eros"
+	// Kept only to repair requests persisted before the spelling correction.
+	// New public requests are validated exclusively against the canonical value.
+	legacyGayBarDoggyScene = "gay_bar_doggy_10ero"
 )
 
 type backendWorkflowSpec struct {
@@ -56,16 +60,29 @@ func qwenLTXWorkflowSpec(requiresTargetPath bool) backendWorkflowSpec {
 }
 
 var tenErosBatch2BackendWorkflowSpecs = map[string]backendWorkflowSpec{
-	"gay_oral_cumshot_10eros":    qwenLTXWorkflowSpec(true),
-	"lesbian_cunnilingus_10eros": qwenLTXWorkflowSpec(true),
-	"gay_bondage_10eros":         qwenLTXWorkflowSpec(true),
-	"gay_crossdressing_10eros":   qwenLTXWorkflowSpec(false),
-	"gay_butt_slap_10eros":       qwenLTXWorkflowSpec(false),
-	"gay_kneeling_doggy_10eros":  qwenLTXWorkflowSpec(true),
-	"lesbian_strap_on_10eros":    qwenLTXWorkflowSpec(true),
-	"lesbian_doggy_10eros":       qwenLTXWorkflowSpec(true),
-	"lesbian_cowgirl_10eros":     qwenLTXWorkflowSpec(true),
-	"gay_bar_doggy_10ero":        qwenLTXWorkflowSpec(true),
+	"gay_oral_cumshot_10eros":     qwenLTXWorkflowSpec(false),
+	"lesbian_cunnilingus_10eros":  qwenLTXWorkflowSpec(false),
+	"gay_bondage_10eros":          qwenLTXWorkflowSpec(false),
+	"gay_crossdressing_10eros":    qwenLTXWorkflowSpec(false),
+	"gay_butt_slap_10eros":        qwenLTXWorkflowSpec(false),
+	"gay_kneeling_doggy_10eros":   qwenLTXWorkflowSpec(false),
+	"lesbian_strap_on_10eros":     qwenLTXWorkflowSpec(true),
+	"lesbian_doggy_10eros":        qwenLTXWorkflowSpec(true),
+	"lesbian_cowgirl_10eros":      qwenLTXWorkflowSpec(true),
+	tenErosBatch2GayBarDoggyScene: qwenLTXWorkflowSpec(true),
+}
+
+func normalizeStoredWorkflowRequest(workflowType string, req AnimeVideoRequest) AnimeVideoRequest {
+	if workflowType != WorkflowTenErosBatch2ImageVideo {
+		return req
+	}
+	if strings.TrimSpace(req.SceneName) == legacyGayBarDoggyScene {
+		req.SceneName = tenErosBatch2GayBarDoggyScene
+	}
+	if strings.TrimSpace(req.VideoSceneName) == legacyGayBarDoggyScene {
+		req.VideoSceneName = tenErosBatch2GayBarDoggyScene
+	}
+	return req
 }
 
 var minimaxH3BackendWorkflowSpecs = map[string]backendWorkflowSpec{

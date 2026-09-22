@@ -26,23 +26,23 @@ if [[ -z "$SOURCE_PATH" ]]; then
   exit 2
 fi
 if [[ -z "$TARGET_PATH" ]]; then
-  echo "TARGET_PATH is required because this run includes two-person scenes" >&2
+  echo "TARGET_PATH is required because this run includes two-image scenes" >&2
   exit 2
 fi
 
 # The value after the separator is the scene's exact input-image requirement.
 # Keep this list in sync with docs/10eros-batch2-image-to-video-api.md.
 SCENES=(
-  "gay_oral_cumshot_10eros|two"
-  "lesbian_cunnilingus_10eros|two"
-  "gay_bondage_10eros|two"
+  "gay_oral_cumshot_10eros|one"
+  "lesbian_cunnilingus_10eros|one"
+  "gay_bondage_10eros|one"
   "gay_crossdressing_10eros|one"
   "gay_butt_slap_10eros|one"
-  "gay_kneeling_doggy_10eros|two"
+  "gay_kneeling_doggy_10eros|one"
   "lesbian_strap_on_10eros|two"
   "lesbian_doggy_10eros|two"
   "lesbian_cowgirl_10eros|two"
-  "gay_bar_doggy_10ero|two"
+  "gay_bar_doggy_10eros|two"
 )
 
 failures=0
@@ -76,7 +76,7 @@ for entry in "${SCENES[@]}"; do
       curl_args+=(--data-urlencode "target_path=$TARGET_PATH")
       ;;
     one)
-      # Deliberately omit target_path for single-person scenes.
+      # Deliberately omit target_path for single-image scenes.
       ;;
     *)
       echo "Invalid input mode '$input_mode' for scene '$scene_name'" >&2
@@ -84,7 +84,7 @@ for entry in "${SCENES[@]}"; do
       ;;
   esac
 
-  echo "===== $scene_name ($input_mode-person) ====="
+  echo "===== $scene_name ($input_mode-image) ====="
   if ! curl "${curl_args[@]}"; then
     echo >&2
     echo "Submission failed: $scene_name" >&2

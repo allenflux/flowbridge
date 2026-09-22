@@ -421,8 +421,29 @@ func normalizeTaskIDs(taskIDs []string) []string {
 func (s *Server) adminList(w http.ResponseWriter, r *http.Request) {
 	queryTaskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
 	if queryTaskID != "" {
-		if _, err := s.store.GetPublicTask(r.Context(), queryTaskID); err == nil {
+		_, err := s.store.GetPublicTask(r.Context(), queryTaskID)
+		if err == nil {
 			http.Redirect(w, r, "/admin/workflows/"+queryTaskID, http.StatusFound)
+			return
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			if writeRequestTimeout(w, err) {
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		workflowTaskID, err := s.store.FindWorkflowTaskIDByBackendReference(r.Context(), queryTaskID)
+		if err == nil {
+			http.Redirect(w, r, "/admin/workflows/"+workflowTaskID, http.StatusFound)
+			return
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			if writeRequestTimeout(w, err) {
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -437,7 +458,7 @@ func (s *Server) adminList(w http.ResponseWriter, r *http.Request) {
 	if pageSize > 200 {
 		pageSize = 200
 	}
-	total, err := s.store.CountTasks(r.Context())
+	total, err := s.store.CountTasksMatching(r.Context(), queryTaskID)
 	if err != nil {
 		if writeRequestTimeout(w, err) {
 			return
@@ -453,7 +474,7 @@ func (s *Server) adminList(w http.ResponseWriter, r *http.Request) {
 		page = totalPages
 	}
 	offset := (page - 1) * pageSize
-	tasks, err := s.store.ListTasks(r.Context(), pageSize, offset)
+	tasks, err := s.store.ListTasksMatching(r.Context(), queryTaskID, pageSize, offset)
 	if err != nil {
 		if writeRequestTimeout(w, err) {
 			return

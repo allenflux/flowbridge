@@ -14,7 +14,7 @@
     "/api/public/generate/10eros/batch-2/image-to-video": {
       "post": {
         "summary": "提交第二批 10Eros 生图转视频组合任务",
-        "description": "先调用 /api/public/generate/qwen/two-image，再调用 /api/public/generate/videos/scenes/8s/ltx。双人模板要求 source_path 和 target_path；单人模板只要求 source_path。中间图固定关闭加密和水印，最终视频才应用调用方设置。",
+        "description": "先调用 /api/public/generate/qwen/two-image，再调用 /api/public/generate/videos/scenes/8s/ltx。单图场景 gay_oral_cumshot_10eros、lesbian_cunnilingus_10eros、gay_bondage_10eros、gay_crossdressing_10eros、gay_butt_slap_10eros、gay_kneeling_doggy_10eros 只使用 source_path；双图场景 lesbian_strap_on_10eros、lesbian_doggy_10eros、lesbian_cowgirl_10eros、gay_bar_doggy_10eros 要求 source_path 和 target_path。中间图固定关闭加密和水印，最终视频才应用调用方设置。",
         "operationId": "createTenErosBatch2ImageToVideoWorkflow",
         "parameters": [
           {
@@ -36,7 +36,7 @@
             "in": "formData",
             "required": false,
             "type": "string",
-            "description": "第二张人物图片 URL；双人模板必填，单人模板省略"
+            "description": "第二张输入图片 URL；仅 lesbian_strap_on_10eros、lesbian_doggy_10eros、lesbian_cowgirl_10eros、gay_bar_doggy_10eros 必填；其余 6 个单图场景省略，误传也不会向 Qwen 转发"
           },
           {
             "name": "scene_name",
@@ -53,9 +53,9 @@
               "lesbian_strap_on_10eros",
               "lesbian_doggy_10eros",
               "lesbian_cowgirl_10eros",
-              "gay_bar_doggy_10ero"
+              "gay_bar_doggy_10eros"
             ],
-            "description": "第一步与第二步使用同一个场景名"
+            "description": "第一步与第二步使用同一个场景名。前 6 个枚举值为单图场景，后 4 个枚举值为双图场景"
           },
           {
             "name": "video_scene_name",

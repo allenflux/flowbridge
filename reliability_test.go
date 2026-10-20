@@ -333,7 +333,7 @@ func TestUnknownBackendStatusFailsAfterConfiguredLimit(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, _, err = worker.waitBackendTask(ctx, 0, 1, "backend-task", "api-key")
+	_, _, err = worker.waitBackendTask(ctx, 0, 1, "backend-task", "api-key", nil)
 	if err == nil || !strings.Contains(err.Error(), "missing or unknown status") {
 		t.Fatalf("waitBackendTask error = %v", err)
 	}

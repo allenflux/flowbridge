@@ -129,6 +129,33 @@ curl --location 'http://127.0.0.1:8080/api/public/generate/undress/anime/video' 
   --data-urlencode 'output_format=video'
 ```
 
+### Authentication and header forwarding
+
+For v2 authentication, add `X-SECRET-KEY: your-secret-key` (or the compatible
+`SECRETKEY` header) alongside `Apikey` / `X-API-KEY`. API Key remains required.
+The backend chooses v1 when Secret Key is absent or blank, and handles v2
+validation and fallback itself. FlowBridge forwards both Secret Key aliases;
+the backend gives `X-SECRET-KEY` priority over `SECRETKEY`.
+
+FlowBridge automatically forwards application headers, including `Authorization`,
+cookies, and future custom headers, with their multiple values intact. It stores
+these headers with the workflow in SQLite and reuses them for both steps,
+task polling, retries, submission verification, and recovery after a restart.
+Callers must supply them as HTTP headers; a JSON `backend_headers` field cannot
+override the incoming headers. Existing body/form API keys retain precedence
+over `Apikey`, followed by `X-API-KEY`; the selected key is sent in both API Key
+headers for compatibility.
+
+Hop-by-hop headers (including names listed in `Connection`) and headers describing
+the original body are excluded. FlowBridge sets its own `Host`, `Content-Type`,
+`Content-Length`, `Accept`, and `User-Agent` and lets its HTTP client manage
+compression. Backend redirects must stay on the same scheme, host, and port so
+custom credentials cannot be forwarded to another origin. New application
+headers need no FlowBridge code change; changes to request bodies or to the
+workflow itself may still require an update. Stored header credentials receive
+the same database access protection as the existing API key and are omitted
+from public task responses and workflow step request displays.
+
 ### Minimax H3 character-turnaround workflow
 
 This dedicated FlowBridge route accepts one scene only:

@@ -276,7 +276,7 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 
 	backendID := step.BackendTaskID
 	if backendID == "" && step.Status == StatusRunning {
-		rawResp, resp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, req.APIKey)
+		rawResp, resp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, req.APIKey, req.BackendHeaders)
 		if visibility == submissionFound {
 			backendID = backendTaskID(resp)
 			if err := w.updateStepAccepted(task.ID, 1, backendID, rawResp); err != nil {
@@ -289,7 +289,7 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 		}
 	}
 	if backendID == "" {
-		rawResp, resp, err := w.postBackendForm(ctx, task.ID, 1, spec.ImagePath, form, req.APIKey)
+		rawResp, resp, err := w.postBackendForm(ctx, task.ID, 1, spec.ImagePath, form, req.APIKey, req.BackendHeaders)
 		if err != nil {
 			if !errors.Is(err, errBackendSubmissionUncertain) {
 				err = w.failStep(1, err, rawResp)
@@ -306,7 +306,7 @@ func (w *Worker) ensureAnimeImage(ctx context.Context, task *WorkflowTask, req A
 		}
 	}
 
-	rawResult, result, err := w.waitBackendTask(ctx, task.ID, 1, backendID, req.APIKey)
+	rawResult, result, err := w.waitBackendTask(ctx, task.ID, 1, backendID, req.APIKey, req.BackendHeaders)
 	if err != nil {
 		return "", w.failStep(1, err, rawResult)
 	}
@@ -518,7 +518,7 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 
 	backendID := step.BackendTaskID
 	if backendID == "" && step.Status == StatusRunning {
-		rawResp, resp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, req.APIKey)
+		rawResp, resp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, req.APIKey, req.BackendHeaders)
 		if visibility == submissionFound {
 			backendID = backendTaskID(resp)
 			if err := w.updateStepAccepted(task.ID, 2, backendID, rawResp); err != nil {
@@ -531,7 +531,7 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 		}
 	}
 	if backendID == "" {
-		rawResp, resp, err := w.postBackendForm(ctx, task.ID, 2, spec.VideoPath, form, req.APIKey)
+		rawResp, resp, err := w.postBackendForm(ctx, task.ID, 2, spec.VideoPath, form, req.APIKey, req.BackendHeaders)
 		if err != nil {
 			if !errors.Is(err, errBackendSubmissionUncertain) {
 				err = w.failStep(2, err, rawResp)
@@ -548,7 +548,7 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 		}
 	}
 
-	rawResult, _, err := w.waitBackendTask(ctx, task.ID, 2, backendID, req.APIKey)
+	rawResult, _, err := w.waitBackendTask(ctx, task.ID, 2, backendID, req.APIKey, req.BackendHeaders)
 	if err != nil {
 		return nil, w.failStep(2, err, rawResult)
 	}
@@ -558,7 +558,7 @@ func (w *Worker) ensureAnimeVideo(ctx context.Context, task *WorkflowTask, req A
 	return rawResult, nil
 }
 
-func (w *Worker) postBackendForm(ctx context.Context, workflowTaskID int64, stepIndex int, path string, form map[string]string, apiKey string) (json.RawMessage, map[string]any, error) {
+func (w *Worker) postBackendForm(ctx context.Context, workflowTaskID int64, stepIndex int, path string, form map[string]string, apiKey string, headers http.Header) (json.RawMessage, map[string]any, error) {
 	attempts := w.cfg.MaxSubmitRetries + 1
 	if attempts < 1 {
 		attempts = 1
@@ -567,7 +567,7 @@ func (w *Worker) postBackendForm(ctx context.Context, workflowTaskID int64, step
 	var lastResp map[string]any
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		raw, resp, err := w.backend.PostForm(ctx, path, form, apiKey)
+		raw, resp, err := w.backend.PostForm(ctx, path, form, apiKey, headers)
 		if err == nil {
 			return raw, resp, nil
 		}
@@ -580,7 +580,7 @@ func (w *Worker) postBackendForm(ctx context.Context, workflowTaskID int64, step
 
 		if isAmbiguousSubmitError(err) {
 			_ = w.store.UpdateStepPollError(ctx, workflowTaskID, stepIndex, fmt.Sprintf("backend submission returned an ambiguous response; checking task_id visibility: %s", err.Error()), raw)
-			acceptedRaw, acceptedResp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, apiKey)
+			acceptedRaw, acceptedResp, visibility := w.waitForBackendSubmissionVisibility(ctx, form, apiKey, headers)
 			switch visibility {
 			case submissionFound:
 				return acceptedRaw, acceptedResp, nil
@@ -609,13 +609,13 @@ func (w *Worker) postBackendForm(ctx context.Context, workflowTaskID int64, step
 	return lastRaw, lastResp, lastErr
 }
 
-func (w *Worker) waitForBackendSubmissionVisibility(ctx context.Context, form map[string]string, apiKey string) (json.RawMessage, map[string]any, submissionVisibility) {
+func (w *Worker) waitForBackendSubmissionVisibility(ctx context.Context, form map[string]string, apiKey string, headers http.Header) (json.RawMessage, map[string]any, submissionVisibility) {
 	taskID := strings.TrimSpace(form["task_id"])
 	if taskID == "" {
 		return nil, nil, submissionIndeterminate
 	}
 
-	firstRaw, firstResp, firstVisibility := w.lookupBackendSubmission(ctx, taskID, apiKey)
+	firstRaw, firstResp, firstVisibility := w.lookupBackendSubmission(ctx, taskID, apiKey, headers)
 	if firstVisibility == submissionFound {
 		return firstRaw, firstResp, firstVisibility
 	}
@@ -631,7 +631,7 @@ func (w *Worker) waitForBackendSubmissionVisibility(ctx context.Context, form ma
 		return firstRaw, firstResp, submissionIndeterminate
 	case <-timer.C:
 	}
-	finalRaw, finalResp, finalVisibility := w.lookupBackendSubmission(ctx, taskID, apiKey)
+	finalRaw, finalResp, finalVisibility := w.lookupBackendSubmission(ctx, taskID, apiKey, headers)
 	if finalVisibility == submissionFound {
 		return finalRaw, finalResp, finalVisibility
 	}
@@ -641,8 +641,8 @@ func (w *Worker) waitForBackendSubmissionVisibility(ctx context.Context, form ma
 	return finalRaw, finalResp, submissionIndeterminate
 }
 
-func (w *Worker) lookupBackendSubmission(ctx context.Context, taskID string, apiKey string) (json.RawMessage, map[string]any, submissionVisibility) {
-	raw, resp, err := w.backend.GetTask(ctx, taskID, apiKey)
+func (w *Worker) lookupBackendSubmission(ctx context.Context, taskID string, apiKey string, headers http.Header) (json.RawMessage, map[string]any, submissionVisibility) {
+	raw, resp, err := w.backend.GetTask(ctx, taskID, apiKey, headers)
 	if err == nil {
 		if backendTaskID(resp) != "" {
 			return raw, resp, submissionFound
@@ -692,12 +692,12 @@ func submitRetryDelay(attempt int) time.Duration {
 	return delay
 }
 
-func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, stepIndex int, backendTaskID string, apiKey string) (json.RawMessage, map[string]any, error) {
+func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, stepIndex int, backendTaskID string, apiKey string, headers http.Header) (json.RawMessage, map[string]any, error) {
 	var lastRaw json.RawMessage
 	consecutiveErrors := 0
 	taskNotFoundErrors := 0
 	for {
-		raw, result, err := w.backend.GetTask(ctx, backendTaskID, apiKey)
+		raw, result, err := w.backend.GetTask(ctx, backendTaskID, apiKey, headers)
 		if err != nil {
 			lastRaw = raw
 			if isBackendHTTPStatus(err, http.StatusNotFound) {
@@ -708,7 +708,7 @@ func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, step
 				}
 				select {
 				case <-ctx.Done():
-					return w.finalBackendCheck(backendTaskID, apiKey, lastRaw, nil, ctx.Err())
+					return w.finalBackendCheck(backendTaskID, apiKey, headers, lastRaw, nil, ctx.Err())
 				case <-time.After(w.cfg.PollInterval):
 					continue
 				}
@@ -720,7 +720,7 @@ func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, step
 			}
 			select {
 			case <-ctx.Done():
-				return w.finalBackendCheck(backendTaskID, apiKey, lastRaw, nil, ctx.Err())
+				return w.finalBackendCheck(backendTaskID, apiKey, headers, lastRaw, nil, ctx.Err())
 			case <-time.After(w.cfg.PollInterval):
 				continue
 			}
@@ -737,7 +737,7 @@ func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, step
 			}
 			select {
 			case <-ctx.Done():
-				return w.finalBackendCheck(backendTaskID, apiKey, lastRaw, result, ctx.Err())
+				return w.finalBackendCheck(backendTaskID, apiKey, headers, lastRaw, result, ctx.Err())
 			case <-time.After(w.cfg.PollInterval):
 				continue
 			}
@@ -751,14 +751,14 @@ func (w *Worker) waitBackendTask(ctx context.Context, workflowTaskID int64, step
 		default:
 			select {
 			case <-ctx.Done():
-				return w.finalBackendCheck(backendTaskID, apiKey, lastRaw, result, ctx.Err())
+				return w.finalBackendCheck(backendTaskID, apiKey, headers, lastRaw, result, ctx.Err())
 			case <-time.After(w.cfg.PollInterval):
 			}
 		}
 	}
 }
 
-func (w *Worker) finalBackendCheck(backendTaskID string, apiKey string, lastRaw json.RawMessage, lastResult map[string]any, cause error) (json.RawMessage, map[string]any, error) {
+func (w *Worker) finalBackendCheck(backendTaskID string, apiKey string, headers http.Header, lastRaw json.RawMessage, lastResult map[string]any, cause error) (json.RawMessage, map[string]any, error) {
 	if errors.Is(cause, context.Canceled) {
 		return lastRaw, lastResult, fmt.Errorf("stopped waiting for backend task %s: %w", backendTaskID, cause)
 	}
@@ -768,7 +768,7 @@ func (w *Worker) finalBackendCheck(backendTaskID string, apiKey string, lastRaw 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	raw, result, err := w.backend.GetTask(ctx, backendTaskID, apiKey)
+	raw, result, err := w.backend.GetTask(ctx, backendTaskID, apiKey, headers)
 	if err == nil {
 		status, valid := parseBackendStatus(result)
 		if !valid {

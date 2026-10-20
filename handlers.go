@@ -536,7 +536,7 @@ func (s *Server) adminDetail(w http.ResponseWriter, r *http.Request) {
 		"Title":  "Workflow Detail",
 		"Task":   detail.WorkflowTask,
 		"Steps":  detail.Steps,
-		"Req":    requestFromRaw(detail.RequestPayload),
+		"Req":    redactedRequest(requestFromRaw(detail.RequestPayload)),
 		"Detail": detail,
 	}); err != nil {
 		log.Printf("render admin detail failed: %v", err)
@@ -544,6 +544,7 @@ func (s *Server) adminDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseAnimeVideoRequest(r *http.Request) (AnimeVideoRequest, error) {
+	headers := filterBackendHeaders(r.Header)
 	contentType := r.Header.Get("Content-Type")
 	if strings.Contains(contentType, "application/json") {
 		var req AnimeVideoRequest
@@ -563,7 +564,8 @@ func parseAnimeVideoRequest(r *http.Request) (AnimeVideoRequest, error) {
 			}
 			req.IsWatermark = aliases.Watermark
 		}
-		req.APIKey = firstNonEmpty(req.APIKey, r.Header.Get("Apikey"), r.Header.Get("X-API-Key"))
+		req.BackendHeaders = headers
+		req.APIKey = firstNonEmpty(req.APIKey, headers.Get("Apikey"), headers.Get("X-API-Key"))
 		return req, nil
 	}
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -605,7 +607,8 @@ func parseAnimeVideoRequest(r *http.Request) (AnimeVideoRequest, error) {
 		Fee:                form.Get("fee"),
 		Title:              form.Get("title"),
 		HashKey:            form.Get("hash_key"),
-		APIKey:             firstNonEmpty(form.Get("apikey"), form.Get("Apikey"), form.Get("api_key"), r.Header.Get("Apikey"), r.Header.Get("X-API-Key")),
+		APIKey:             firstNonEmpty(form.Get("apikey"), form.Get("Apikey"), form.Get("api_key"), headers.Get("Apikey"), headers.Get("X-API-Key")),
+		BackendHeaders:     headers,
 		NotifyURL:          form.Get("notify_url"),
 		TaskID:             form.Get("task_id"),
 	}, nil
@@ -730,6 +733,13 @@ func requestFromRaw(raw json.RawMessage) AnimeVideoRequest {
 
 func redactedRequest(req AnimeVideoRequest) AnimeVideoRequest {
 	req.APIKey = redactSecret(req.APIKey)
+	req.BackendHeaders = req.BackendHeaders.Clone()
+	for name, values := range req.BackendHeaders {
+		for index := range values {
+			values[index] = "****"
+		}
+		req.BackendHeaders[name] = values
+	}
 	return req
 }
 

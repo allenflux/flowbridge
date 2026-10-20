@@ -803,6 +803,7 @@ func TestUnknownSubmitOutcomeChecksAcceptance(t *testing.T) {
 				backendUndressAnimeImagePath,
 				map[string]string{"task_id": "bridge-unknown_image"},
 				"api-key-1",
+				nil,
 			)
 			if err != nil {
 				t.Fatalf("postBackendForm: %v", err)
@@ -857,6 +858,7 @@ func TestAmbiguousSubmitRetriesOnlyAfterTwoNotFoundChecks(t *testing.T) {
 		backendUndressAnimeImagePath,
 		map[string]string{"task_id": "bridge-retry_image"},
 		"api-key-1",
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("postBackendForm: %v", err)
@@ -1007,7 +1009,7 @@ func TestWatermarkPostProcessingStatusContinuesPolling(t *testing.T) {
 	})
 
 	worker := NewWorker(nil, backend, cfg)
-	_, result, err := worker.waitBackendTask(context.Background(), 0, 2, "video-task", "api-key-1")
+	_, result, err := worker.waitBackendTask(context.Background(), 0, 2, "video-task", "api-key-1", nil)
 	if err != nil {
 		t.Fatalf("waitBackendTask: %v", err)
 	}

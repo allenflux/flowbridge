@@ -46,6 +46,17 @@ func NewBackendClient(cfg Config) *BackendClient {
 		client: &http.Client{
 			Timeout:   cfg.HTTPTimeout,
 			Transport: transport,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return errors.New("stopped after 10 redirects")
+				}
+				// Custom authentication headers do not receive net/http's built-in
+				// cross-origin credential protection. Keep them on this backend.
+				if len(via) > 0 && (!strings.EqualFold(req.URL.Scheme, via[0].URL.Scheme) || !strings.EqualFold(req.URL.Host, via[0].URL.Host)) {
+					return errors.New("backend redirect to a different origin is not allowed")
+				}
+				return nil
+			},
 		},
 	}
 }
@@ -54,7 +65,7 @@ func (c *BackendClient) CloseIdleConnections() {
 	c.client.CloseIdleConnections()
 }
 
-func (c *BackendClient) PostForm(ctx context.Context, path string, form map[string]string, apiKey string) (json.RawMessage, map[string]any, error) {
+func (c *BackendClient) PostForm(ctx context.Context, path string, form map[string]string, apiKey string, headers http.Header) (json.RawMessage, map[string]any, error) {
 	values := url.Values{}
 	for key, value := range form {
 		values.Set(key, value)
@@ -63,10 +74,8 @@ func (c *BackendClient) PostForm(ctx context.Context, path string, form map[stri
 	if err != nil {
 		return nil, nil, err
 	}
-	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "curl/8.7.1")
-	applyAPIKey(req, apiKey)
+	applyBackendHeaders(req, apiKey, headers)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -100,7 +109,7 @@ func (c *BackendClient) PostForm(ctx context.Context, path string, form map[stri
 	return json.RawMessage(raw), decoded, nil
 }
 
-func (c *BackendClient) GetTask(ctx context.Context, taskID string, apiKey string) (json.RawMessage, map[string]any, error) {
+func (c *BackendClient) GetTask(ctx context.Context, taskID string, apiKey string, headers http.Header) (json.RawMessage, map[string]any, error) {
 	values := url.Values{}
 	values.Set("task_id", taskID)
 	if strings.TrimSpace(apiKey) != "" {
@@ -111,9 +120,7 @@ func (c *BackendClient) GetTask(ctx context.Context, taskID string, apiKey strin
 	if err != nil {
 		return nil, nil, err
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "curl/8.7.1")
-	applyAPIKey(req, apiKey)
+	applyBackendHeaders(req, apiKey, headers)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, nil, err

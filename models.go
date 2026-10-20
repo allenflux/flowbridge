@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"time"
 )
 
@@ -79,6 +80,8 @@ type AnimeVideoRequest struct {
 	APIKey             string `json:"apikey"`
 	NotifyURL          string `json:"notify_url"`
 	TaskID             string `json:"task_id"`
+
+	BackendHeaders http.Header `json:"backend_headers,omitempty"`
 }
 
 type PublicTaskResponse struct {

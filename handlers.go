@@ -94,6 +94,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+publicMinimaxH3MultiPath, s.createMinimaxH3ImageToVideoWorkflow)
 	s.mux.HandleFunc("GET /api/public/task", s.getPublicTask)
 	s.mux.HandleFunc("POST /api/public/task", s.getPublicTask)
+	s.mux.HandleFunc("GET /api/public/task/backend-ids", s.getPublicTaskBackendIDs)
 	s.mux.HandleFunc("POST "+publicTaskDetailsPath, s.getPublicTaskDetails)
 	s.mux.HandleFunc("GET /admin/workflows", s.adminList)
 	s.mux.HandleFunc("GET /admin/workflows/", s.adminDetail)
@@ -344,6 +345,27 @@ func (s *Server) getPublicTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, publicTaskQueryResponse(TaskDetail{WorkflowTask: *task}))
+}
+
+func (s *Server) getPublicTaskBackendIDs(w http.ResponseWriter, r *http.Request) {
+	taskID, err := taskIDFromRequest(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	response, err := s.store.GetTaskBackendIDs(r.Context(), taskID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "task not found"})
+			return
+		}
+		if writeRequestTimeout(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) getPublicTaskDetails(w http.ResponseWriter, r *http.Request) {

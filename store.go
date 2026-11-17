@@ -229,6 +229,59 @@ func (s *Store) GetPublicTask(ctx context.Context, taskID string) (*WorkflowTask
 		FROM workflow_tasks WHERE task_id = ?`, taskID)
 }
 
+func (s *Store) GetTaskBackendIDs(ctx context.Context, taskID string) (*TaskBackendIDs, error) {
+	rows, err := s.db.QueryContext(ctx, `WITH responses AS (
+		SELECT task.task_id, task.workflow_type, step.step_index, step.step_name,
+			CASE WHEN step.backend_task_id <> '' AND json_valid(step.response_payload)
+				THEN step.response_payload END AS accepted,
+			CASE WHEN step.backend_task_id <> '' AND step.status IN (?, ?) AND json_valid(step.result_payload)
+				THEN step.result_payload END AS result
+		FROM workflow_tasks AS task
+		LEFT JOIN workflow_steps AS step ON step.workflow_task_id = task.id
+		WHERE task.task_id = ?
+	)
+	SELECT task_id, workflow_type, step_name, accepted -> '$.task_id', accepted -> '$.uuid',
+		result -> '$.task_id', result -> '$.uuid'
+	FROM responses ORDER BY step_index`, StatusSuccess, StatusFailed, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	response := TaskBackendIDs{Steps: []StepBackendIDs{}}
+	for rows.Next() {
+		var stepName sql.NullString
+		var acceptedTaskID, acceptedUUID, resultTaskID, resultUUID []byte
+		if err := rows.Scan(&response.TaskID, &response.WorkflowType, &stepName, &acceptedTaskID, &acceptedUUID, &resultTaskID, &resultUUID); err != nil {
+			return nil, err
+		}
+		if stepName.Valid {
+			response.Steps = append(response.Steps, StepBackendIDs{
+				StepName: stepName.String,
+				TaskID:   firstBackendIdentifier(acceptedTaskID, resultTaskID),
+				UUID:     firstBackendIdentifier(acceptedUUID, resultUUID),
+			})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if response.TaskID == "" {
+		return nil, sql.ErrNoRows
+	}
+	return &response, nil
+}
+
+func firstBackendIdentifier(values ...[]byte) *string {
+	for _, value := range values {
+		var id string
+		if len(value) > 0 && json.Unmarshal(value, &id) == nil && strings.TrimSpace(id) != "" {
+			return &id
+		}
+	}
+	return nil
+}
+
 func (s *Store) GetTasksByTaskIDs(ctx context.Context, taskIDs []string) ([]WorkflowTask, error) {
 	return s.getTasksByTaskIDs(ctx, taskIDs, maxBatchResultPayloadBytes)
 }

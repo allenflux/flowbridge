@@ -294,6 +294,25 @@ curl --location 'http://127.0.0.1:8080/api/public/task/details' \
   --data '["bridge_task_a", "bridge_task_b"]'
 ```
 
+Query the P0 task IDs and UUIDs for both steps of a FlowBridge workflow.
+
+```text
+GET /api/public/task/backend-ids?task_id=bridge_xxx
+```
+
+Use the FlowBridge `task_id` from the create response. The API returns HTTP 200 with the P0 `task_id` and `uuid` available for each step. Each field is `null` until its value is available. A missing or blank query ID returns HTTP 400. An unknown FlowBridge ID returns HTTP 404.
+
+```json
+{
+  "task_id": "bridge_xxx",
+  "workflow_type": "10eros_batch2_image_to_video",
+  "steps": [
+    {"step_name": "anime_image", "task_id": "p0-image", "uuid": "p0-image-uuid"},
+    {"step_name": "anime_video", "task_id": null, "uuid": null}
+  ]
+}
+```
+
 Admin console:
 
 ```text

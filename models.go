@@ -59,6 +59,18 @@ type TaskDetail struct {
 	Steps []WorkflowStepRecord `json:"steps"`
 }
 
+type TaskBackendIDs struct {
+	TaskID       string           `json:"task_id"`
+	WorkflowType string           `json:"workflow_type"`
+	Steps        []StepBackendIDs `json:"steps"`
+}
+
+type StepBackendIDs struct {
+	StepName string  `json:"step_name"`
+	TaskID   *string `json:"task_id"`
+	UUID     *string `json:"uuid"`
+}
+
 type AnimeVideoRequest struct {
 	SourcePath         string `json:"source_path"`
 	TargetPath         string `json:"target_path"`

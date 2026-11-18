@@ -198,9 +198,6 @@ func TestTenErosWorkflowsRouteAndForwardParameters(t *testing.T) {
 			} else {
 				expectedImageForm.Set("hash_key", req.HashKey)
 			}
-			if test.expectedVideoPath == backendUndressAnimeVideoPath {
-				expectedImageForm.Set("notify_url", req.NotifyURL)
-			}
 			assertValuesEqual(t, requests[0].Form, expectedImageForm)
 
 			expectedVideoScene := test.videoScene
@@ -223,7 +220,6 @@ func TestTenErosWorkflowsRouteAndForwardParameters(t *testing.T) {
 			if test.expectedVideoPath == backendLTX8sVideoPath {
 				expectedVideoForm.Set("incoming_prompt", req.WanIncomingPrompt)
 				expectedVideoForm.Set("audio_enabled", "false")
-				expectedVideoForm.Set("notify_url", req.NotifyURL)
 			} else {
 				expectedVideoForm.Set("qwen_incoming_prompt", req.QwenIncomingPrompt)
 				expectedVideoForm.Set("wan_incoming_prompt", req.WanIncomingPrompt)
@@ -334,7 +330,6 @@ func TestMinimaxH3WorkflowRoutesAndForwardsParameters(t *testing.T) {
 		"bid":          {req.BID},
 		"app_id":       {req.AppID},
 		"fee":          {req.Fee},
-		"notify_url":   {req.NotifyURL},
 		"video_format": {req.VideoFormat},
 		"is_encrypt":   {"true"},
 		"task_id":      {"bridge-h3_video"},

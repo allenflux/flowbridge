@@ -64,7 +64,7 @@ Apikey: <用户 API Key>
 | `fee` | string | 否 | `10` | 费用参数 |
 | `title` | string | 否 | 空 | 任务标题 |
 | `hash_key` | string | 否 | 空 | 只向支持该字段的后端步骤透传；Qwen 双图步骤由 Apikey 自动计算 |
-| `notify_url` | string | 否 | 空 | 只发送给最终 LTX 步骤，避免中间图和最终视频重复回调 |
+| `notify_url` | string | 否 | 空 | FlowBridge 在总任务进入终态后发送 [JSON 回调](../README.md#workflow-completion-callback)，其中 `task_id` 与提交响应一致 |
 | `task_id` | string | 否 | 自动生成 | FlowBridge 对外任务 ID；建议由调用方提供唯一值，便于幂等查询 |
 
 ### 水印与加密规则

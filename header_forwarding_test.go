@@ -66,6 +66,7 @@ func TestFilterBackendHeadersDropsTransportAndRewrittenBodyMetadata(t *testing.T
 		"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
 		"TE", "Trailer", "Transfer-Encoding", "Upgrade", "Host", "Content-Type", "Content-Length",
 		"Content-Encoding", "Accept-Encoding", "Accept", "User-Agent", "Content-MD5", "Content-Range", "Digest", "Expect",
+		"Notify_URL", "Notify-URL",
 	}
 	headers := http.Header{
 		"Authorization": {"Bearer token"},

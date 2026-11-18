@@ -13,7 +13,7 @@ Apikey: <用户 API Key>
 1. `POST /api/public/generate/qwen/two-image`
 2. 等待中间图成功，将其 URL 作为 `source_path` 提交到 `POST /api/public/generate/videos/scenes/8s/ltx`
 
-两个后端步骤使用相同的 `scene_name`。中间图固定发送 `is_encrypt=false`、`is_watermark=false`；加密、水印、视频格式、音频和回调设置只应用到最终 LTX 视频。
+两个后端步骤使用相同的 `scene_name`。中间图固定发送 `is_encrypt=false`、`is_watermark=false`。加密、水印、视频格式和音频设置只应用到最终 LTX 视频。
 
 ## 场景与输入图片
 
@@ -52,7 +52,7 @@ Apikey: <用户 API Key>
 | `fee` | string | 否 | `10` | 费用参数 |
 | `title` | string | 否 | 空 | 任务标题 |
 | `hash_key` | string | 否 | 空 | 仅向最终 LTX 步骤透传 |
-| `notify_url` | string | 否 | 空 | 仅发送给最终 LTX 步骤，避免重复回调 |
+| `notify_url` | string | 否 | 空 | FlowBridge 在总任务进入终态后发送 [JSON 回调](../README.md#workflow-completion-callback)，其中 `task_id` 与提交响应一致 |
 | `task_id` | string | 否 | 自动生成 | 建议传唯一值，便于幂等查询和故障排查 |
 
 ## 双图场景示例

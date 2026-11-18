@@ -12,6 +12,7 @@ Edit `config.json` first:
   "backend_base_url": "http://your-backend:8000",
   "db_path": "flowbridge.db",
   "worker_concurrency": 8,
+  "callback_concurrency": 8,
   "worker_queue_size": 10000,
   "max_runnable_tasks": 10000,
   "max_submit_retries": 8,
@@ -156,6 +157,30 @@ workflow itself may still require an update. Stored header credentials receive
 the same database access protection as the existing API key and are omitted
 from public task responses and workflow step request displays.
 
+### Workflow completion callback
+
+Set `notify_url` when submitting a workflow to have FlowBridge send a JSON
+`POST` when the overall task succeeds or fails. FlowBridge keeps the callback
+URL for its own use. The body is a P0-format task object. Both `task_id` and
+`uuid` contain the FlowBridge `task_id` returned at submission. FlowBridge
+recalculates `sign` for this object using the P0 algorithm.
+
+- `status: 2` means success. `error_code` is `SUCCESS` and `out_data` preserves
+  the final P0 result format, including encrypted output details when present.
+- `status: -1` means failure. `error` describes the failure and `error_code`
+  preserves P0's failure code when available, with `FAILED` as the fallback.
+
+Dedicated callback workers deliver notifications independently of workflow
+workers. Concurrency defaults to eight and can be set with `callback_concurrency`
+or `FLOWBRIDGE_CALLBACK_WORKERS`. Each HTTP attempt has a 10-second timeout and
+any 2xx response acknowledges delivery. Temporary network errors and HTTP 408,
+429, and 5xx responses are retried with exponential backoff and jitter, up to
+six total attempts. Pending deliveries resume from SQLite after a restart.
+
+If a response is lost after the receiver processes the callback, a retry can
+deliver it again. Use `task_id` to deduplicate deliveries. During rollout, P0 may
+still send callbacks for steps it received with a `notify_url` before the upgrade.
+
 ### Minimax H3 character-turnaround workflow
 
 This dedicated FlowBridge route accepts one scene only:
@@ -172,7 +197,7 @@ It waits for the intermediate image before submitting the video step:
 | Image | `/api/public/generate/undress/anime` | `character_turnaround_sheet_h3` |
 | Video | `/api/public/generate/videos/scenes/minimax-h3/multi` | `character_turnaround_sheet_h3` |
 
-`Apikey` is required and is forwarded to both steps. `video_scene_name` may be omitted; if supplied, it must equal `scene_name`. The intermediate image is explicitly created without encryption or watermarking. The final video request receives the intermediate image URL and the request's `bid`, `app_id`, `fee`, `notify_url`, and `video_format` metadata. Values such as `video_format=image/webp` are forwarded only to this final video step. If the caller supplies `is_encrypt=true`, it is likewise forwarded only to the final step; omitting it preserves the backend's existing default.
+`Apikey` is required and is forwarded to both steps. If supplied, `video_scene_name` must equal `scene_name`. The intermediate image is explicitly created without encryption or watermarking. The final video request receives the intermediate image URL and the request's `bid`, `app_id`, `fee`, and `video_format` metadata. Values such as `video_format=image/webp` are forwarded only to this final video step. If the caller supplies `is_encrypt=true`, it is likewise forwarded only to the final step. Omitting it preserves the backend's existing default.
 
 ```bash
 curl --location 'http://127.0.0.1:8080/api/public/generate/videos/scenes/minimax-h3/multi' \
@@ -227,7 +252,7 @@ The extended parameters are:
 - `is_encrypt`: controls the final video. The intermediate image is always explicitly unencrypted so its URL can be consumed by LTX. This also applies to the Qwen two-image route's new encryption parameter.
 - `is_watermark` (alias `watermark`): controls only the final video and defaults to `true`. Every intermediate image is explicitly generated with `is_watermark=false`, so a watermark is never applied twice.
 - `bid`, `app_id`, `fee`, `title`, and `hash_key` are forwarded where the selected backend endpoint supports them.
-- For these composed scenes, `notify_url` is sent only to the final LTX step, avoiding an intermediate-image callback followed by a second video callback.
+- `notify_url` sets the destination for the [workflow completion callback](#workflow-completion-callback).
 
 Two-image example:
 

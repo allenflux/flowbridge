@@ -62,6 +62,7 @@ const (
 type Worker struct {
 	store                    *Store
 	backend                  *BackendClient
+	callbacks                *callbackDispatcher
 	cfg                      Config
 	queue                    chan int64
 	seenMu                   sync.Mutex
@@ -83,6 +84,7 @@ func NewWorker(store *Store, backend *BackendClient, cfg Config) *Worker {
 	return &Worker{
 		store:                    store,
 		backend:                  backend,
+		callbacks:                newCallbackDispatcher(store, cfg.CallbackConcurrency),
 		cfg:                      cfg,
 		queue:                    make(chan int64, queueSize),
 		seen:                     make(map[int64]struct{}),
@@ -91,7 +93,7 @@ func NewWorker(store *Store, backend *BackendClient, cfg Config) *Worker {
 }
 
 func (w *Worker) Start(ctx context.Context) {
-	w.wg.Add(w.cfg.WorkerConcurrency + 1)
+	w.wg.Add(w.cfg.WorkerConcurrency + 2)
 	for i := 0; i < w.cfg.WorkerConcurrency; i++ {
 		go func() {
 			defer w.wg.Done()
@@ -101,6 +103,10 @@ func (w *Worker) Start(ctx context.Context) {
 	go func() {
 		defer w.wg.Done()
 		w.recoverLoop(ctx)
+	}()
+	go func() {
+		defer w.wg.Done()
+		w.callbacks.run(ctx)
 	}()
 }
 
@@ -332,12 +338,7 @@ func buildBackendImageForm(req AnimeVideoRequest, spec backendWorkflowSpec) map[
 		"is_watermark":    "false",
 		"task_id":         backendStepTaskID(req.TaskID, "image"),
 	}
-	addBackendMetadata(
-		form,
-		req,
-		spec.ImagePath != backendQwenTwoImagePath,
-		spec.VideoPath != backendLTX8sVideoPath && spec.VideoPath != backendMinimaxH3MultiPath,
-	)
+	addBackendMetadata(form, req, spec.ImagePath != backendQwenTwoImagePath)
 
 	if spec.ImagePath == backendQwenTwoImagePath && spec.RequiresTargetPath {
 		form["target_path"] = req.TargetPath
@@ -353,7 +354,6 @@ func buildBackendVideoForm(req AnimeVideoRequest, spec backendWorkflowSpec, vide
 			"bid":         req.BID,
 			"app_id":      req.AppID,
 			"fee":         defaultString(req.Fee, "10"),
-			"notify_url":  req.NotifyURL,
 			"task_id":     backendStepTaskID(req.TaskID, "video"),
 		}
 		if videoFormat := strings.TrimSpace(req.VideoFormat); videoFormat != "" && videoFormat != "video/h264-mp4" {
@@ -375,7 +375,7 @@ func buildBackendVideoForm(req AnimeVideoRequest, spec backendWorkflowSpec, vide
 		"video_format": defaultString(req.VideoFormat, "video/h264-mp4"),
 		"task_id":      backendStepTaskID(req.TaskID, "video"),
 	}
-	addBackendMetadata(form, req, true, spec.VideoPath == backendLTX8sVideoPath)
+	addBackendMetadata(form, req, true)
 
 	if spec.VideoPath == backendLTX8sVideoPath {
 		form["incoming_prompt"] = defaultString(req.WanIncomingPrompt, req.IncomingPrompt)
@@ -388,14 +388,11 @@ func buildBackendVideoForm(req AnimeVideoRequest, spec backendWorkflowSpec, vide
 	return compactForm(form)
 }
 
-func addBackendMetadata(form map[string]string, req AnimeVideoRequest, includeHashKey bool, includeNotifyURL bool) {
+func addBackendMetadata(form map[string]string, req AnimeVideoRequest, includeHashKey bool) {
 	form["bid"] = req.BID
 	form["app_id"] = req.AppID
 	if includeHashKey {
 		form["hash_key"] = req.HashKey
-	}
-	if includeNotifyURL {
-		form["notify_url"] = req.NotifyURL
 	}
 }
 

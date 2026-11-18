@@ -10,24 +10,26 @@ import (
 )
 
 const (
-	defaultRequestTimeout = 15 * time.Second
-	defaultTaskTimeout    = 72 * time.Hour
+	defaultRequestTimeout  = 15 * time.Second
+	defaultTaskTimeout     = 72 * time.Hour
+	defaultCallbackWorkers = 8
 )
 
 type Config struct {
-	Addr              string        `json:"addr"`
-	BackendBaseURL    string        `json:"backend_base_url"`
-	DBPath            string        `json:"db_path"`
-	WorkerConcurrency int           `json:"worker_concurrency"`
-	WorkerQueueSize   int           `json:"worker_queue_size"`
-	MaxRunnableTasks  int           `json:"max_runnable_tasks"`
-	MaxSubmitRetries  int           `json:"max_submit_retries"`
-	MaxPollErrors     int           `json:"max_poll_errors"`
-	MaxTaskNotFound   int           `json:"max_task_not_found"`
-	PollInterval      time.Duration `json:"-"`
-	RequestTimeout    time.Duration `json:"-"`
-	TaskTimeout       time.Duration `json:"-"`
-	HTTPTimeout       time.Duration `json:"-"`
+	Addr                string        `json:"addr"`
+	BackendBaseURL      string        `json:"backend_base_url"`
+	DBPath              string        `json:"db_path"`
+	WorkerConcurrency   int           `json:"worker_concurrency"`
+	CallbackConcurrency int           `json:"callback_concurrency"`
+	WorkerQueueSize     int           `json:"worker_queue_size"`
+	MaxRunnableTasks    int           `json:"max_runnable_tasks"`
+	MaxSubmitRetries    int           `json:"max_submit_retries"`
+	MaxPollErrors       int           `json:"max_poll_errors"`
+	MaxTaskNotFound     int           `json:"max_task_not_found"`
+	PollInterval        time.Duration `json:"-"`
+	RequestTimeout      time.Duration `json:"-"`
+	TaskTimeout         time.Duration `json:"-"`
+	HTTPTimeout         time.Duration `json:"-"`
 }
 
 func LoadConfig() Config {
@@ -43,36 +45,38 @@ func LoadConfig() Config {
 
 func defaultConfig() Config {
 	return Config{
-		Addr:              ":8080",
-		BackendBaseURL:    "http://localhost:8000",
-		DBPath:            "flowbridge.db",
-		WorkerConcurrency: 4,
-		WorkerQueueSize:   10000,
-		MaxRunnableTasks:  10000,
-		MaxSubmitRetries:  8,
-		MaxPollErrors:     10,
-		MaxTaskNotFound:   60,
-		PollInterval:      3 * time.Second,
-		RequestTimeout:    defaultRequestTimeout,
-		TaskTimeout:       defaultTaskTimeout,
-		HTTPTimeout:       30 * time.Second,
+		Addr:                ":8080",
+		BackendBaseURL:      "http://localhost:8000",
+		DBPath:              "flowbridge.db",
+		WorkerConcurrency:   4,
+		CallbackConcurrency: defaultCallbackWorkers,
+		WorkerQueueSize:     10000,
+		MaxRunnableTasks:    10000,
+		MaxSubmitRetries:    8,
+		MaxPollErrors:       10,
+		MaxTaskNotFound:     60,
+		PollInterval:        3 * time.Second,
+		RequestTimeout:      defaultRequestTimeout,
+		TaskTimeout:         defaultTaskTimeout,
+		HTTPTimeout:         30 * time.Second,
 	}
 }
 
 type fileConfig struct {
-	Addr              *string `json:"addr"`
-	BackendBaseURL    *string `json:"backend_base_url"`
-	DBPath            *string `json:"db_path"`
-	WorkerConcurrency *int    `json:"worker_concurrency"`
-	WorkerQueueSize   *int    `json:"worker_queue_size"`
-	MaxRunnableTasks  *int    `json:"max_runnable_tasks"`
-	MaxSubmitRetries  *int    `json:"max_submit_retries"`
-	MaxPollErrors     *int    `json:"max_poll_errors"`
-	MaxTaskNotFound   *int    `json:"max_task_not_found"`
-	PollInterval      *string `json:"poll_interval"`
-	RequestTimeout    *string `json:"request_timeout"`
-	TaskTimeout       *string `json:"task_timeout"`
-	HTTPTimeout       *string `json:"http_timeout"`
+	Addr                *string `json:"addr"`
+	BackendBaseURL      *string `json:"backend_base_url"`
+	DBPath              *string `json:"db_path"`
+	WorkerConcurrency   *int    `json:"worker_concurrency"`
+	CallbackConcurrency *int    `json:"callback_concurrency"`
+	WorkerQueueSize     *int    `json:"worker_queue_size"`
+	MaxRunnableTasks    *int    `json:"max_runnable_tasks"`
+	MaxSubmitRetries    *int    `json:"max_submit_retries"`
+	MaxPollErrors       *int    `json:"max_poll_errors"`
+	MaxTaskNotFound     *int    `json:"max_task_not_found"`
+	PollInterval        *string `json:"poll_interval"`
+	RequestTimeout      *string `json:"request_timeout"`
+	TaskTimeout         *string `json:"task_timeout"`
+	HTTPTimeout         *string `json:"http_timeout"`
 }
 
 func loadConfigFile(path string, cfg *Config) error {
@@ -98,6 +102,9 @@ func loadConfigFile(path string, cfg *Config) error {
 	}
 	if file.WorkerConcurrency != nil {
 		cfg.WorkerConcurrency = *file.WorkerConcurrency
+	}
+	if file.CallbackConcurrency != nil {
+		cfg.CallbackConcurrency = *file.CallbackConcurrency
 	}
 	if file.WorkerQueueSize != nil {
 		cfg.WorkerQueueSize = *file.WorkerQueueSize
@@ -134,6 +141,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.BackendBaseURL = envString("BACKEND_BASE_URL", cfg.BackendBaseURL)
 	cfg.DBPath = envString("FLOWBRIDGE_DB_PATH", cfg.DBPath)
 	cfg.WorkerConcurrency = envInt("FLOWBRIDGE_WORKERS", cfg.WorkerConcurrency)
+	cfg.CallbackConcurrency = envInt("FLOWBRIDGE_CALLBACK_WORKERS", cfg.CallbackConcurrency)
 	cfg.WorkerQueueSize = envInt("FLOWBRIDGE_QUEUE_SIZE", cfg.WorkerQueueSize)
 	cfg.MaxRunnableTasks = envInt("FLOWBRIDGE_MAX_RUNNABLE_TASKS", cfg.MaxRunnableTasks)
 	cfg.MaxSubmitRetries = envNonNegativeInt("FLOWBRIDGE_MAX_SUBMIT_RETRIES", cfg.MaxSubmitRetries)
@@ -158,6 +166,9 @@ func normalizeConfig(cfg *Config) {
 	}
 	if cfg.WorkerConcurrency <= 0 {
 		cfg.WorkerConcurrency = 4
+	}
+	if cfg.CallbackConcurrency <= 0 {
+		cfg.CallbackConcurrency = defaultCallbackWorkers
 	}
 	if cfg.WorkerQueueSize < cfg.WorkerConcurrency {
 		cfg.WorkerQueueSize = cfg.WorkerConcurrency

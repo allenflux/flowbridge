@@ -15,6 +15,7 @@ func filterBackendHeaders(headers http.Header) http.Header {
 		"host": true, "content-length": true, "content-type": true,
 		"content-encoding": true, "content-md5": true, "content-range": true, "digest": true,
 		"accept": true, "accept-encoding": true, "user-agent": true, "expect": true,
+		"notify_url": true, "notify-url": true,
 	}
 	for name, values := range headers {
 		if strings.EqualFold(name, "Connection") {

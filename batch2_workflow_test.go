@@ -152,6 +152,9 @@ func TestTenErosBatch2WorkflowForwardsSingleAndTwoImageScenes(t *testing.T) {
 				if request.Form.Get("scene_name") != wantScene {
 					t.Errorf("request %d scene_name = %q", index, request.Form.Get("scene_name"))
 				}
+				if value, present := request.Form["notify_url"]; present {
+					t.Errorf("request %d unexpectedly received notify_url=%q", index, value)
+				}
 			}
 			wantTargetPath := ""
 			if test.wantTargetForward {

@@ -20,7 +20,8 @@ const maxBatchResultPayloadBytes = 32 << 20
 const storeMaxOpenConnections = 4
 
 type Store struct {
-	db *sql.DB
+	db           *sql.DB
+	callbackWake chan struct{}
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -29,7 +30,7 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db}
+	store := &Store{db: db, callbackWake: make(chan struct{}, 1)}
 	if err := store.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -110,6 +111,26 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY(workflow_task_id) REFERENCES workflow_tasks(id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_workflow_steps_backend_task ON workflow_steps(backend_task_id)`,
+		`CREATE TABLE IF NOT EXISTS workflow_callbacks (
+			workflow_task_id INTEGER PRIMARY KEY REFERENCES workflow_tasks(id) ON DELETE CASCADE,
+			notify_url TEXT NOT NULL,
+			next_attempt_at INTEGER,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			delivered_at INTEGER,
+			last_error TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_workflow_callbacks_due ON workflow_callbacks(next_attempt_at, workflow_task_id)
+			WHERE next_attempt_at IS NOT NULL`,
+		`CREATE TRIGGER IF NOT EXISTS enqueue_workflow_callback
+		AFTER UPDATE OF status ON workflow_tasks
+		WHEN OLD.status IN (0, 1) AND NEW.status IN (-1, 2)
+		BEGIN
+			INSERT INTO workflow_callbacks (workflow_task_id, notify_url, next_attempt_at)
+			SELECT NEW.id, notify_url, CAST(unixepoch('subsec') * 1000 AS INTEGER)
+			FROM (SELECT CASE WHEN json_valid(NEW.request_payload)
+				THEN NEW.request_payload ->> '$.notify_url' END AS notify_url)
+			WHERE typeof(notify_url) = 'text' AND trim(notify_url, char(9, 10, 11, 12, 13, 32)) <> '';
+		END`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
@@ -594,6 +615,9 @@ func (s *Store) MarkTaskSuccess(ctx context.Context, taskID int64, result json.R
 		SET status = ?, final_result = ?, error_message = '', updated_at = ?, finished_at = ?
 		WHERE id = ? AND status IN (?, ?)`,
 		StatusSuccess, string(result), now, now, taskID, StatusPending, StatusRunning)
+	if err == nil {
+		s.wakeCallbacks()
+	}
 	return err
 }
 
@@ -637,7 +661,11 @@ func (s *Store) markTaskFailed(ctx context.Context, taskID int64, stepIndex int,
 		StatusFailed, message, now, now, taskID, StatusPending, StatusRunning); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.wakeCallbacks()
+	return nil
 }
 
 func (s *Store) UpdateStepStart(ctx context.Context, taskID int64, index int, request json.RawMessage) error {

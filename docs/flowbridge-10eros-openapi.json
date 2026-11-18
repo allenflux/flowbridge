@@ -182,7 +182,7 @@
             "required": false,
             "type": "string",
             "default": "",
-            "description": "只发送给最终 LTX 步骤"
+            "description": "FlowBridge 在总任务进入终态后向此地址发送 JSON POST。回调格式兼容 P0，task_id 与提交响应一致。"
           },
           {
             "name": "task_id",

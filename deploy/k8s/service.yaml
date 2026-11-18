@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: flowbridge
+  labels:
+    app.kubernetes.io/name: flowbridge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: flowbridge
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

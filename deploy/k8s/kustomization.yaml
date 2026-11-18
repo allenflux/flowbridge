@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - pvc.yaml
+
+images:
+  - name: flowbridge
+    newName: registry.example.com/team/flowbridge
+    newTag: replace-with-image-tag
+
+configMapGenerator:
+  - name: flowbridge-config
+    literals:
+      - FLOWBRIDGE_ADDR=:8080
+      - FLOWBRIDGE_DB_PATH=/app/data/flowbridge.db
+      - BACKEND_BASE_URL=https://p0-api.inaiai.com
+      - FLOWBRIDGE_WORKERS=8
+      - FLOWBRIDGE_CALLBACK_WORKERS=8

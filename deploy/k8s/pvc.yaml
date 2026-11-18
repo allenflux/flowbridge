@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: flowbridge-data
+  labels:
+    app.kubernetes.io/name: flowbridge
+spec:
+  # Set storageClassName here to override the cluster default.
+  accessModes:
+    - ReadWriteOnce
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 10Gi

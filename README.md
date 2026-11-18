@@ -51,6 +51,10 @@ Docker volume: flowbridge-data
 
 Do not use `docker compose down -v` unless you intentionally want to delete the DB volume.
 
+## Kubernetes
+
+The [Kubernetes deployment guide](deploy/k8s/README.md) includes manifests for a single-replica deployment with persistent SQLite storage and commands to build, deploy, and verify the service.
+
 ## Smoke Tests
 
 Lightweight service health test:
